@@ -39,6 +39,7 @@ raw-cpuid = "11.6.0"
 serde = { version = "1.0.210", features = ["derive"] }
 # set-partitions = "1.0.1"
 shared_memory = "0.12.4"
+sysinfo = "0.37.2"
 # tauri = "2.5.1"
 thousands = "0.2.0"
 thread_local = "1.1.7"

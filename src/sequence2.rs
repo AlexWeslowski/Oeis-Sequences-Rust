@@ -22,7 +22,7 @@ lazy_static! {
     static ref PartitionCache: Mutex<HashMap<(Vec<usize>, usize, usize), Vec<Combination>>> = Mutex::new(HashMap::new());
 }
 
-impl Sequence
+impl<const N: usize> Sequence<N> where [u32; N]: Default
 {
 
 fn partition(elements: &[usize], minlen: usize, maxlen: usize) -> Vec<Combination> {
