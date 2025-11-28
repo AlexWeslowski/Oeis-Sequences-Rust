@@ -1,4 +1,4 @@
-use crate::Sequence;
+use crate::Sequence24;
 
 extern crate num;
 
@@ -22,7 +22,7 @@ lazy_static! {
     static ref PartitionCache: Mutex<HashMap<(Vec<usize>, usize, usize), Vec<Combination>>> = Mutex::new(HashMap::new());
 }
 
-impl<const N: usize> Sequence<N> where [u32; N]: Default
+impl Sequence24
 {
 
 fn partition(elements: &[usize], minlen: usize, maxlen: usize) -> Vec<Combination> {

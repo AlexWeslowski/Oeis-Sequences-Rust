@@ -10,8 +10,8 @@ extern crate std;
 extern crate thousands;
 
 use ahash::{AHasher, AHashMap, AHashSet, HashSetExt, RandomState};
-use bit_vec::BitVec;
-use crossbeam_skiplist::SkipSet;
+//use bit_vec::BitVec;
+//use crossbeam_skiplist::SkipSet;
 use fixedbitset::FixedBitSet;
 //use flurry::{Guard, HashSet};
 use function_name::named;
@@ -36,12 +36,12 @@ use std::slice::SliceIndex;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use std::vec::Vec as SequenceVec;
 use thousands::Separable;
 use time_graph_macros::instrument;
 use tinyvec::{array_vec, ArrayVec};
 use tinyvec::{tiny_vec, TinyVec};
 //use tinyvec::TinyVec as SequenceVec;
-use std::vec::Vec as SequenceVec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Factor {
@@ -119,8 +119,9 @@ generate_map!(MapFactor, u32, Factor);
 generate_map!(MapI64, u64, i64);
 generate_map!(MapU64, u64, u64);
 
+const ARYSIZE: usize = 24;
 
-pub struct Sequence<const N: usize>
+pub struct Sequence24
 {
     n: u32,
     pub min_factors_len: usize,
@@ -129,14 +130,14 @@ pub struct Sequence<const N: usize>
     capacity_sqrt: u32,
     half: Ratio<i32>,
     one: Ratio<i32>,
-    //combinations_vec: TinyVec<[TinyVec<[u32; 24]>; 1024]>,
-    combinations_tinyvec: TinyVec<[TinyVec<[i32; 24]>; 1024]>,
-    combinations_arrayvec: TinyVec<[TinyVec<[i32; 24]>; 1024]>,
-	combinations_ary: TinyVec<[[u32; 24]; 1024]>, 
-	combinations_vec: Vec<TinyVec<[u32; 24]>>,
-    //combinations_tinyvec: TinyVec<[TinyVec<[i32; 24]>; 1024]>,
-    //combinations_arrayvec: SequenceVec<ArrayVec<[i32; 24]>>,
-	//combinations_ary: SequenceVec<[u32; 24]>,
+    //combinations_vec: TinyVec<[TinyVec<[u32; ARYSIZE]>; 1024]>,
+    combinations_tinyvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
+    combinations_arrayvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
+	combinations_ary: TinyVec<[[u32; ARYSIZE]; 1024]>, 
+	combinations_vec: Vec<TinyVec<[u32; ARYSIZE]>>,
+    //combinations_tinyvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
+    //combinations_arrayvec: SequenceVec<ArrayVec<[i32; ARYSIZE]>>,
+	//combinations_ary: SequenceVec<[u32; ARYSIZE]>,
 	pub max_combinations: Vec<usize>,
 	backtrack_vec_file: Option<std::fs::File>,
 	backtrack_tinyvec_file: Option<std::fs::File>,
@@ -144,6 +145,8 @@ pub struct Sequence<const N: usize>
 	backtrack_ary_file: Option<std::fs::File>,
     //pub lcm_map: Mutex<HashMap<(i32, i32), i32, RandomState>>,
     pub lcm_map: Arc<Mutex<HashMap<(i32, i32), i32, RandomState>>>,
+	pub bits0: FixedBitSet,
+	pub bits1: FixedBitSet,
     //setprimes: Arc<HashSet<i64, RandomState>>,
     pub bitprimes: FixedBitSet,
     //vecprimes: Arc<Vec<u32>>,
@@ -189,14 +192,14 @@ lazy_static! {
 impl<const N: usize> Default for Sequence<N> {
         fn default() -> Self {
             Self {
-                data: [0; 24], // Initialize with a default value (e.g., 0 for u32)
+                data: [0; ARYSIZE], // Initialize with a default value (e.g., 0 for u32)
             }
         }
     }
 }
 */
 
-impl<const N: usize> Sequence<N> where [u32; 24]: Default
+impl Sequence24
 {
 
 pub fn new(capacity: usize, global: bool, resize: bool) -> Self
@@ -233,14 +236,14 @@ pub fn new(capacity: usize, global: bool, resize: bool) -> Self
         capacity_sqrt: capacity.isqrt() as u32,
         half: Ratio::<i32>::new(1, 2), 
         one: Ratio::<i32>::new(1, 1),
-        //combinations_vec: TinyVec::<[TinyVec<[u32; 24]>; 1024]>::new(), 
-		combinations_vec: Vec::<TinyVec<[u32; 24]>>::with_capacity(1024), 
+        //combinations_vec: TinyVec::<[TinyVec<[u32; ARYSIZE]>; 1024]>::new(), 
+		combinations_vec: Vec::<TinyVec<[u32; ARYSIZE]>>::with_capacity(1024), 
 		//combinations_tinyvec: tiny_vec!([(); N].map(|_| 0u32)),
-		combinations_tinyvec: TinyVec::<[TinyVec<[i32; 24]>; 1024]>::new(),
-		//combinations_arrayvec: SequenceVec::<ArrayVec<[i32; 24]>>::with_capacity(1024),
-		combinations_arrayvec: TinyVec::<[TinyVec<[i32; 24]>; 1024]>::new(),
-		//combinations_ary: SequenceVec::<[u32; 24]>::with_capacity(1024), 
-		combinations_ary: TinyVec::<[[u32; 24]; 1024]>::new(), 
+		combinations_tinyvec: TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new(),
+		//combinations_arrayvec: SequenceVec::<ArrayVec<[i32; ARYSIZE]>>::with_capacity(1024),
+		combinations_arrayvec: TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new(),
+		//combinations_ary: SequenceVec::<[u32; ARYSIZE]>::with_capacity(1024), 
+		combinations_ary: TinyVec::<[[u32; ARYSIZE]; 1024]>::new(), 
 		max_combinations: vec![0],
 		backtrack_vec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_vec.txt").unwrap()) } else { None },
 		backtrack_tinyvec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_tinyvec.txt").unwrap()) } else { None },
@@ -249,6 +252,8 @@ pub fn new(capacity: usize, global: bool, resize: bool) -> Self
         //lcm_map: Mutex::new(HashMap::<(i64, i64), i64, RandomState>::new()),
         //lcm_map: Mutex::new(HashMap::with_hasher(RandomState::new())),
         lcm_map: Arc::new(Mutex::new(HashMap::with_hasher(RandomState::new()))),
+		bits0: FixedBitSet::with_capacity(max(524288, capacity/8)),
+		bits1: FixedBitSet::with_capacity(max(524288, capacity/8)),
         //setprimes: Arc::new(HashSet::<i64, RandomState>::new()), 
         bitprimes: FixedBitSet::with_capacity(capacity + 1),
         //vecprimes: Arc::new(Vec::<u32>::new()), 
@@ -399,7 +404,7 @@ pub fn init(&mut self)
 
 
 /*
-for tpl in [("ary", "[u32; 24]", "u32"), ("arrayvec", "ArrayVec<[i32; 24]>", "i32"), ("tinyvec", "TinyVec<[i32; 24]>", "i32"), ("vec", "Vec<u32>", "u32")]:
+for tpl in [("ary", "[u32; ARYSIZE]", "u32"), ("arrayvec", "ArrayVec<[i32; ARYSIZE]>", "i32"), ("tinyvec", "TinyVec<[i32; ARYSIZE]>", "i32"), ("vec", "Vec<u32>", "u32")]:
 	print(f"""fn is_divisible_{tpl[0]}(factors: &{tpl[1]}, factors_len: usize, fact: {tpl[2]}) -> bool {{
 	if factors_len == 0 {
 		return false;
@@ -420,7 +425,7 @@ for tpl in [("ary", "[u32; 24]", "u32"), ("arrayvec", "ArrayVec<[i32; 24]>", "i3
 	}}
 }}\n\n""")
 */
-fn is_divisible_ary(factors: &[u32; 24], factors_len: usize, fact: u32) -> bool {
+fn is_divisible_ary(factors: &[u32; ARYSIZE], factors_len: usize, fact: u32) -> bool {
 	if factors_len == 0 {
 		return false;
 	}
@@ -443,7 +448,7 @@ fn is_divisible_ary(factors: &[u32; 24], factors_len: usize, fact: u32) -> bool 
 }
 
 
-fn is_divisible_arrayvec(factors: &ArrayVec<[i32; 24]>, factors_len: usize, fact: i32) -> bool {
+fn is_divisible_arrayvec(factors: &ArrayVec<[i32; ARYSIZE]>, factors_len: usize, fact: i32) -> bool {
 	if factors_len == 0 {
 		return false;
 	}
@@ -464,7 +469,7 @@ fn is_divisible_arrayvec(factors: &ArrayVec<[i32; 24]>, factors_len: usize, fact
 }
 
 
-fn is_divisible_tinyvec(factors: &TinyVec<[i32; 24]>, factors_len: usize, fact: i32) -> bool {
+fn is_divisible_tinyvec(factors: &TinyVec<[i32; ARYSIZE]>, factors_len: usize, fact: i32) -> bool {
 	if factors_len == 0 {
 		return false;
 	}
@@ -505,7 +510,7 @@ fn is_divisible_vec(factors: &Vec<u32>, factors_len: usize, fact: u32) -> bool {
     }
 }
 
-pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: [u32; 24], factors_len: usize)
+pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: [u32; ARYSIZE], factors_len: usize)
 {
     let t0 = Instant::now();
     //println!("backtrack_ary(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors_len);
@@ -513,7 +518,7 @@ pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: [u32; 24], f
     {
         if (factors_len >= self.min_factors_len && factors_len <= self.max_factors_len) 
         {
-			let mut factors_sorted: [u32; 24] = [0; 24];
+			let mut factors_sorted: [u32; ARYSIZE] = [0; ARYSIZE];
 			for i in 0..factors_len {
 				factors_sorted[i] = factors[i];
 			}
@@ -581,7 +586,7 @@ pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: [u32; 24], f
     } else {
         
 		unsafe {
-			let mut factors_array: [u32; 24] = [0; 24];
+			let mut factors_array: [u32; ARYSIZE] = [0; ARYSIZE];
 			for i in 0..factors_len {
 				factors_array[i] = factors[i];
 			}
@@ -643,7 +648,7 @@ pub fn backtrack_ary(&mut self, istart: u32, itarget: u32, factors: [u32; 24], f
 }
  
  
-pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: ArrayVec<[i32; 24]>)
+pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: ArrayVec<[i32; ARYSIZE]>)
 {
     let t0 = Instant::now();
     //println!("backtrack_arrayvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
@@ -680,14 +685,14 @@ pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: Arr
 						}
 					}
 					if bappend {
-						let tiny_factors: TinyVec<[i32; 24]> = factors.into();
+						let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
 						if self.combinations_arrayvec.iter().find(|&x| *x == tiny_factors).is_none() {
 							self.combinations_arrayvec.push(tiny_factors);
 						}
 					}
 				}
 			} else {
-				let tiny_factors: TinyVec<[i32; 24]> = factors.into();
+				let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
 				if self.combinations_arrayvec.iter().find(|&x| *x == tiny_factors).is_none() {
 					self.combinations_arrayvec.push(tiny_factors);
 				}
@@ -756,7 +761,7 @@ pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: Arr
 }
 
 
-pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: TinyVec<[i32; 24]>)
+pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: TinyVec<[i32; ARYSIZE]>)
 {
     let t0 = Instant::now();
     //println!("backtrack_tinyvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
@@ -794,14 +799,14 @@ pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: Tiny
 					}
 					if bappend
 					{
-						//let tiny_factors: TinyVec<[i32; 24]> = factors.into();
+						//let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
 						if self.combinations_tinyvec.iter().find(|&x| *x == factors).is_none() {
 							self.combinations_tinyvec.push(factors);
 						}
 					}
 				}
 			} else {
-				//let tiny_factors: TinyVec<[i32; 24]> = factors.into();
+				//let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
 				if self.combinations_tinyvec.iter().find(|&x| *x == factors).is_none() {
 					self.combinations_tinyvec.push(factors);
 				}
@@ -909,7 +914,7 @@ pub fn backtrack_vec(&mut self, istart: u32, itarget: u32, mut factors: Vec<u32>
 					}
 					if bappend 
 					{
-						let mut tiny_factors: TinyVec<[u32; 24]> = TinyVec::new();
+						let mut tiny_factors: TinyVec<[u32; ARYSIZE]> = TinyVec::new();
 						unsafe {
 							for f in 0..factors.len() {
 								tiny_factors.push(*factors.get_unchecked(f));
@@ -921,7 +926,7 @@ pub fn backtrack_vec(&mut self, istart: u32, itarget: u32, mut factors: Vec<u32>
 					}
 				}
 			} else {
-				let mut tiny_factors: TinyVec<[u32; 24]> = TinyVec::new();
+				let mut tiny_factors: TinyVec<[u32; ARYSIZE]> = TinyVec::new();
 				unsafe {
 					for f in 0..factors.len() {
 						tiny_factors.push(*factors.get_unchecked(f));
@@ -996,11 +1001,11 @@ n = 1049520, setvec2 = {[10, 24, 4373], [3, 40, 8746], [8, 15, 8746], [3, 20, 17
  */
 
 #[instrument]
-//pub fn factor_combinations_ary(&mut self, i: u32) -> SequenceVec<[u32; 24]>
-pub fn factor_combinations_ary(&mut self, i: u32) -> TinyVec<[[u32; 24]; 1024]>
+//pub fn factor_combinations_ary(&mut self, i: u32) -> SequenceVec<[u32; ARYSIZE]>
+pub fn factor_combinations_ary(&mut self, i: u32) -> TinyVec<[[u32; ARYSIZE]; 1024]>
 {
 	/*
-	let mut ary: [u32; 24] = [0; 24];
+	let mut ary: [u32; ARYSIZE] = [0; ARYSIZE];
 	ary[0] = 3;
 	ary[1] = 4;
 	ary[2] = 188;
@@ -1013,7 +1018,7 @@ pub fn factor_combinations_ary(&mut self, i: u32) -> TinyVec<[[u32; 24]; 1024]>
 	*/
 	self.n = i;
     self.combinations_ary.clear();
-    let mut factors: [u32; 24] = [0; 24];
+    let mut factors: [u32; ARYSIZE] = [0; ARYSIZE];
     self.backtrack_ary(2, i, factors, 0);
 	if self.combinations_ary.len() > self.max_combinations[self.max_combinations.len() - 1] {
 		self.max_combinations.push(self.combinations_ary.len());
@@ -1022,11 +1027,11 @@ pub fn factor_combinations_ary(&mut self, i: u32) -> TinyVec<[[u32; 24]; 1024]>
 }
 
 #[instrument]
-pub fn factor_combinations_tinyvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32; 24]>; 1024]>
+pub fn factor_combinations_tinyvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
 {
 	//println!("factor_combinations_tinyvec(i = {})", i);
     self.combinations_tinyvec.clear();
-    let mut factors: TinyVec<[i32; 24]> = TinyVec::new();
+    let mut factors: TinyVec<[i32; ARYSIZE]> = TinyVec::new();
     self.backtrack_tinyvec(2, i as i32, factors.clone());
 	if self.combinations_tinyvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
 		self.max_combinations.push(self.combinations_tinyvec.len());
@@ -1035,12 +1040,12 @@ pub fn factor_combinations_tinyvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32; 
 }
 
 #[instrument]
-//pub fn factor_combinations_arrayvec(&mut self, i: u32) -> SequenceVec<ArrayVec<[i32; 24]>>
-pub fn factor_combinations_arrayvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32; 24]>; 1024]>
+//pub fn factor_combinations_arrayvec(&mut self, i: u32) -> SequenceVec<ArrayVec<[i32; ARYSIZE]>>
+pub fn factor_combinations_arrayvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
 {
 	//println!("factor_combinations_arrayvec(i = {})", i);
     self.combinations_arrayvec.clear();
-    let mut factors: ArrayVec<[i32; 24]> = ArrayVec::new();
+    let mut factors: ArrayVec<[i32; ARYSIZE]> = ArrayVec::new();
     self.backtrack_arrayvec(2, i as i32, factors.clone());
 	if self.combinations_arrayvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
 		self.max_combinations.push(self.combinations_arrayvec.len());
@@ -1049,8 +1054,8 @@ pub fn factor_combinations_arrayvec(&mut self, i: u32) -> TinyVec<[TinyVec<[i32;
 }
 
 #[instrument]
-pub fn factor_combinations_vec(&mut self, i: u32) -> Vec<TinyVec<[u32; 24]>>
-//pub fn factor_combinations_vec(&mut self, i: u32) -> TinyVec<[TinyVec<[u32; 24]>; 1024]>
+pub fn factor_combinations_vec(&mut self, i: u32) -> Vec<TinyVec<[u32; ARYSIZE]>>
+//pub fn factor_combinations_vec(&mut self, i: u32) -> TinyVec<[TinyVec<[u32; ARYSIZE]>; 1024]>
 {
     self.combinations_vec.clear();
     let mut factors: Vec<u32> = Vec::<u32>::new();
@@ -1353,24 +1358,32 @@ fn mult_vec(&mut self, mut ary: Vec<i32>) -> i32
     return ary[ilen - 1];
 }
 
-pub fn calc_density_or(&mut self, n: usize, a: &Vec<i32>) -> Ratio<i32>
+pub fn calc_density_or(&mut self, n: usize, a: &ArrayVec<[i32; ARYSIZE]>) -> Ratio<i32>
 {
 	//let n: usize = a.iter().product::<i32>() as usize;
-	let mut bits = FixedBitSet::with_capacity(n);
+	//let mut bits = FixedBitSet::with_capacity(n);
+	if n > self.bits0.len() {
+		self.bits0.grow(self.bits0.len() + 524288);
+		self.bits1.grow(self.bits1.len() + 524288);
+	}
+	self.bits0.clear();
 	for b in (0..n).step_by(a[0] as usize) {
-		bits.set(b, true);
+		self.bits0.set(b, true);
 	}
 	for i in 1..a.len() {
-		let mut temp = FixedBitSet::with_capacity(n);
+		//let mut temp = FixedBitSet::with_capacity(n);
+		self.bits1.clear();
 		for t in (0..n).step_by(a[i] as usize) {
-			temp.set(t, true);
+			//temp.set(t, true);
+			self.bits1.set(t, true);
 		}
-		bits |= &temp;
+		//bits |= &temp;
+		self.bits0 |= &self.bits1;
 	}
-	return Ratio::<i32>::new(bits.count_ones(0..n) as i32, prod as i32);
+	return Ratio::<i32>::new(self.bits0.count_ones(0..n) as i32, n as i32);
 }
 
-pub fn calc_density_xor(&mut self, n: usize, a: &Vec<i32>) -> Ratio<i32>
+pub fn calc_density_xor(&mut self, n: usize, a: &ArrayVec<[i32; ARYSIZE]>) -> Ratio<i32>
 {
 	//let n: usize = a.iter().product::<i32>() as usize;
 	let mut bits = FixedBitSet::with_capacity(n);
@@ -1384,11 +1397,11 @@ pub fn calc_density_xor(&mut self, n: usize, a: &Vec<i32>) -> Ratio<i32>
 		}
 		bits = bits.bitxor(&temp);
 	}
-	return Ratio::<i32>::new(bits.count_ones(0..n) as i32, prod as i32);
+	return Ratio::<i32>::new(bits.count_ones(0..n) as i32, n as i32);
 }
 
 #[instrument]
-pub fn calc_density_ratio(&mut self, a: &Vec<i32>) -> Ratio<i32>
+pub fn calc_density_ratio(&mut self, n: usize, a: &ArrayVec<[i32; ARYSIZE]>) -> Ratio<i32>
 {
         let ilen: usize = a.len();
         let checkhalf = false;

@@ -2,24 +2,24 @@
 #![allow(unused)]
 #![allow(non_snake_case)] 
 
-extern crate crossbeam;
+//extern crate crossbeam;
 extern crate divisors;
 //extern crate flurry;
 extern crate itertools;
 extern crate num;
 extern crate primes;
 //extern crate seize;
-extern crate shared_memory;
+//extern crate shared_memory;
 extern crate std;
 extern crate thousands;
 
-mod sequence;
+mod sequence24;
 mod sequence2;
 
 use ahash::{AHasher, AHashMap, AHashSet, HashSetExt, RandomState};
-use bit_vec::BitVec;
+//use bit_vec::BitVec;
 use chrono::{Local, Timelike};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use fixedbitset::FixedBitSet;
 //use flurry::HashSet as FlurryHashSet;
 use hashbrown::HashMap;
@@ -31,8 +31,8 @@ use num::rational::{Ratio, Rational32, Rational64};
 //use perf_macro;
 use primes::{PrimeSet, Sieve};
 use raw_cpuid::CpuId;
-use sequence::Sequence;
-use shared_memory::*;
+use sequence24::Sequence24;
+//use shared_memory::*;
 use sysinfo::{Pid, System};
 use thousands::Separable;
 use time_graph;
@@ -43,6 +43,7 @@ use std::clone::Clone;
 use std::collections::{BTreeSet, HashSet};
 use std::cmp::min;
 use std::env;
+use std::error::Error;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::hash::Hash;
@@ -61,7 +62,7 @@ use std::sync::mpsc::{Sender};
 
 /*
 lazy_static! {
-    static ref Seq: Sequence<24> = Sequence::<24>::new(2, 11457600, false);
+    static ref Seq: Sequence24 = Sequence24::new(2, 11457600, false);
 }
 */
 
@@ -102,32 +103,63 @@ struct Main {
 	calcdensity: CalcDensityType,
     matches: Vec<Ratio<i32>>,
     predefined: HashMap<u32, Vec<RatioVec>, RandomState>,
+	outmap: Arc<Mutex<AHashMap<Ratio<i32>, ArrayVec<[u32; 4096]>>>>,
 	tx: Option<Sender<Option<Message>>>,
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash])]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CalcDensityType(u8);
 
 impl CalcDensityType {
-    pub const RATIO: CalcDensityType = CalcDensityType(1 << 1);
-    pub const FRAC: CalcDensityType = CalcDensityType(1 << 1);
-    pub const FRACTION: CalcDensityType = CalcDensityType(1 << 1);
-    pub const OR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BITOR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const XOR: CalcDensityType = CalcDensityType(1 << 3);
-    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 3);
-    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 3);
+    pub const NONE: CalcDensityType = CalcDensityType(0);
+    pub const RATIO: CalcDensityType = CalcDensityType(1 << 0);
+    pub const FRAC: CalcDensityType = CalcDensityType(1 << 0);
+    pub const FRACTION: CalcDensityType = CalcDensityType(1 << 0);
+    pub const OR: CalcDensityType = CalcDensityType(1 << 1);
+    pub const BITOR: CalcDensityType = CalcDensityType(1 << 1);
+    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 1);
+    pub const XOR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 2);
 	
+	#[function_name::named]
+	pub fn to_string(self) -> String {
+		let debug = false;
+		let mut s1 = String::new();
+		if debug { println!("{} line {}", function_name!(), line!()); }
+		if self.is_set(Self::RATIO) {
+			s1.push_str("RATIO|");
+		}
+		if debug { println!("{} line {}", function_name!(), line!()); }
+		if self.is_set(Self::OR) {
+			s1.push_str("OR|");
+		}
+		if debug { println!("{} line {}", function_name!(), line!()); }
+		if self.is_set(Self::XOR) {
+			s1.push_str("XOR|");
+		}
+		let ilen = s1.len();
+		let s2 = if ilen <= 1 { "" } else { &s1[..ilen - 1] };
+		s2.to_string()
+	}
+	
+	#[function_name::named]
 	pub fn from_name(name: &str) -> Option<Self> {
+		let debug = false;
+		if debug { println!("{} line {}", function_name!(), line!()); }
         match name.to_uppercase().trim() {
+            "0" => Some(Self::NONE),
+            "NONE" => Some(Self::NONE),
+            "1" => Some(Self::RATIO),
             "RATIO" => Some(Self::RATIO),
             "FRAC" => Some(Self::FRAC),
             "FRACTION" => Some(Self::FRACTION),
+            "2" => Some(Self::OR),
             "OR" => Some(Self::OR),
             "BITOR" => Some(Self::BITOR),
             "BIT_OR" => Some(Self::BIT_OR),
+            "4" => Some(Self::XOR),
             "XOR" => Some(Self::XOR),
             "BITXOR" => Some(Self::BITXOR),
             "BIT_XOR" => Some(Self::BIT_XOR),
@@ -135,15 +167,32 @@ impl CalcDensityType {
         }
     }
 	
-    pub fn is_set(&self, flag: Status) -> bool {
+	#[function_name::named]
+    pub fn is_set(&self, flag: CalcDensityType) -> bool {
         (self.0 & flag.0) != 0
+    }
+}
+
+impl From<u8> for CalcDensityType {
+    fn from(u: u8) -> Self {
+		let mut cdt = CalcDensityType::NONE;
+		if (u | 1) != 0 {
+			cdt |= CalcDensityType::RATIO;
+		}
+		if (u | 2) != 0 {
+			cdt |= CalcDensityType::OR;
+		}
+		if (u | 4) != 0 {
+			cdt |= CalcDensityType::XOR;
+		}
+		cdt
     }
 }
 
 impl BitOr for CalcDensityType {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self::Output {
-        Status(self.0 | rhs.0)
+        CalcDensityType(self.0 | rhs.0)
     }
 }
 
@@ -155,42 +204,51 @@ impl BitOrAssign for CalcDensityType {
 
 #[derive(Debug)]
 pub enum CalcDensityParseError {
+    EmptyInput(String),
+    InvalidFlag(String),
     InvalidFormat(String),
 }
 
 impl fmt::Display for CalcDensityParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CalcDensityParseError::InvalidFormat(s) => write!(f, "Invalid status format: {}", s),
+            CalcDensityParseError::EmptyInput(s) => write!(f, "Empty input"),
+            CalcDensityParseError::InvalidFlag(s) => write!(f, "Invalid flag: {}", s),
+            CalcDensityParseError::InvalidFormat(s) => write!(f, "Invalid format: {}", s),
         }
     }
 }
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.parse::<u8>() {
-            Ok(val) => Ok(CalcDensityType(val)),
-            Err(_) => Err(CalcDensityParseError::InvalidFormat(s.to_string())),
-        }
+impl Error for CalcDensityParseError {
+}
+
+impl fmt::Display for CalcDensityType {
+	#[function_name::named]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let debug = false;
+		if debug { println!("{} line {}", function_name!(), line!()); }
+        write!(f, "{}", self.to_string())
     }
 }
+
 impl FromStr for CalcDensityType {
     type Err = CalcDensityParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.trim().is_empty() {
-            return Err(StatusParseError::EmptyInput);
+            return Err(CalcDensityParseError::EmptyInput("".to_string()));
         }
-        let mut combined_status = CalcDensityType::NONE;
+        let mut combined_type = CalcDensityType::NONE;
         for part in s.split('|') {
             match CalcDensityType::from_name(part.trim()) {
                 Some(flag) => {
-                    combined_status = combined_status | flag;
+                    combined_type = combined_type | flag;
                 }
                 None => {
-                    return Err(CalcDensityParseError::InvalidFlag(part));
+                    return Err(CalcDensityParseError::InvalidFlag(part.to_string()));
                 }
             }
         }        
-        Ok(combined_status)
+        Ok(combined_type)
     }
 }
 
@@ -221,10 +279,16 @@ struct Combination {
 }
 
 
+macro_rules! message_format {
+    //() => ("{}    {}    [{}]    {}");
+    () => ("{}\t{}\t[{}]\t{}");
+}
+
+
 impl Main
 {
 
-pub fn print_duration(&mut self, seq: &Sequence<24>, mut n: u32, mut icount: u32)
+pub fn print_duration(&mut self, seq: &Sequence24, mut n: u32, mut icount: u32)
 {
     if icount <= 5 {
         return;
@@ -256,17 +320,9 @@ pub fn print_duration(&mut self, seq: &Sequence<24>, mut n: u32, mut icount: u32
     // 
     // 
     // windows release factor_combinations()
-    //     (50,000)   0.42 mins ~ 120,000 per min
-    //    (100,000)   1.33 mins ~ 75,000 per min
-    //    (150,000)   2.70 mins ~ 55,556 per min
-    //    (200,000)   4.32 mins ~ 46,332 per min
-    //    (250,002)   6.28 mins ~ 39,788 per min
-    //    (300,000)   7.97- 8.75 mins ~ 34,286-37,657 per min
-    //    (400,000)  13.27-14.55 mins ~ 27,491-30,151 per min
-    //    (500,000)  19.73-22.20 mins ~ 22,523-25,338 per min
-    //    (750,000)  45.33 mins ~ 16,544 per min
-    //  (5,000,000)  16.70 hrs ~ 4,990 per min
-    //  (6,000,000)  22.71 hrs ~ 4,403 per min
+	// (1,000,000)    1.55 mins ~ 645,161 per min
+	// (2,000,000)    4.50 mins ~ 444,444 per min
+	// (3,000,000)    8.60 mins ~ 348,837 per min
     // (10,000,000)  54.00 mins ~ 185,189 per min
     // (20,000,000) 130.65 mins ~ 153,084 per min
     // (30,000,000) 227.60 mins ~ 131,813 per min
@@ -306,11 +362,13 @@ for inumthreads in range(2, 8 + 1):
 	if len(nums) != nfinish - nstart + 1 or sorted(nums) != list(range(nstart, nfinish+1)):
 		break
 */
+
+
 #[function_name::named]
-pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence<24>) -> Vec<usize>
+pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence24) -> Vec<usize>
 {
     /*
-    let mut seq: Sequence<24> = Sequence::<24>::new(2, nfinish as usize, false);
+    let mut seq: Sequence24 = Sequence24::new(2, nfinish as usize, false);
     seq.bln_factors = true;
     seq.bln_divisors = false;
     seq.set_primes(&primes);
@@ -329,6 +387,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 	let mut n: u32 = if nstepby > nstart { 0 } else { nstart - nstepby };
 	let mut nvec: Vec<u32> = Vec::new();
 	let mut vecmaxcombinations = vec![0];
+	
 	while n < nfinish
     {
 		n += nstepby;
@@ -353,6 +412,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                         }
 						let msg: String = ratiovec.to_string();
 						//println!("{} line {}", function_name!(), line!());
+						self.outmap.lock().unwrap().get_mut(&ratiovec.ratio).unwrap().push(n);
 						if inumthreads == 1 {
 							println!("{}", msg);
 						}
@@ -365,6 +425,18 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
             _ => {
 				let mut icombinations = 0;
 				
+				/*
+				let calc_density: fn(&mut Sequence24, usize, &ArrayVec<[i32; 24]>) -> Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
+					|seq: &mut Sequence24, n: usize, a: &ArrayVec<[i32; 24]>| -> Ratio::<i32> { seq.calc_density_ratio(n, a) }
+				} else if self.calcdensity.is_set(CalcDensityType::OR) {
+					|seq: &mut Sequence24, n: usize, a: &ArrayVec<[i32; 24]>| -> Ratio::<i32> { seq.calc_density_or(n, a) }
+				} else if self.calcdensity.is_set(CalcDensityType::XOR) {
+					|seq: &mut Sequence24, n: usize, a: &ArrayVec<[i32; 24]>| -> Ratio::<i32> { seq.calc_density_xor(n, a) }
+				} else {
+					|seq: &mut Sequence24, _: usize, _: &ArrayVec<[i32; 24]>| -> Ratio::<i32> { Ratio::<i32>::new(0, 1) }
+				};
+				*/
+				
 				if self.ary {
 					let mut prev_combination: [u32; 24] = [0; 24];
 					for this_combination in seq.factor_combinations_ary(n as u32)
@@ -373,27 +445,26 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						//println!("icombinations = {}", icombinations);
 						if this_combination != prev_combination 
 						{
-							let mut vec_combination = Vec::new();
-							for x in &this_combination {
-								if *x != 0 {
-									vec_combination.push(*x as i32);
-								} else {
-									break;
-								}
-							}
-							let density: Ratio<i32> = if self.calc_density.is_set(CalcDensityType::RATIO) {
-								seq.calc_density_ratio(&vec_combination)
-							} else if self.calc_density.is_set(CalcDensityType::OR) {
-								seq.calc_density_or(n as usize, &vec_combination)
-							} else if self.calc_density.is_set(CalcDensityType::XOR) {
-								seq.calc_density_xor(n as usize, &vec_combination)
-							}							
+							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).filter(|&x| x != 0).collect();
+							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
+								seq.calc_density_ratio(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::OR) {
+								seq.calc_density_or(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::XOR) {
+								seq.calc_density_xor(n as usize, &avec)
+							} else {
+								Ratio::<i32>::new(0, 1)
+							};
+							//println!("n = {}, comb = {:?}", n, this_combination);
+							//println!("n = {}, avec = {:?}", n, avec);
+							//println!("n = {}, dens = {}/{}", n, density.numer(), density.denom());
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
-								let vec: String = Itertools::join(&mut vec_combination.iter(), ", ");
+								let vec: String = Itertools::join(&mut avec.iter(), ", ");
 								let num: String = n.separate_with_commas();
-								let msg: String = format!("{}\t{}\t[{}]\t{}", ratio, num, vec, vec_combination.len());
+								let msg: String = format!(message_format!(), ratio, num, vec, avec.len());
 								//println!("{} line {}", function_name!(), line!());
+								self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(n);
 								if inumthreads == 1 {
 									println!("{}", msg);
 								}
@@ -414,13 +485,23 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						//println!("icombinations = {}", icombinations);
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
+								seq.calc_density_ratio(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::OR) {
+								seq.calc_density_or(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::XOR) {
+								seq.calc_density_xor(n as usize, &avec)
+							} else {
+								Ratio::<i32>::new(0, 1)
+							};
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
 								let num: String = n.separate_with_commas();
-								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								let msg: String = format!(message_format!(), ratio, num, vec, this_combination.len());
 								//println!("{} line {}", function_name!(), line!());
+								self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(n);
 								if inumthreads == 1 {
 									println!("{}", msg);
 								}
@@ -439,13 +520,23 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						icombinations += 1;
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
+								seq.calc_density_ratio(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::OR) {
+								seq.calc_density_or(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::XOR) {
+								seq.calc_density_xor(n as usize, &avec)
+							} else {
+								Ratio::<i32>::new(0, 1)
+							};
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
 								let num: String = n.separate_with_commas();
-								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								let msg: String = format!(message_format!(), ratio, num, vec, this_combination.len());
 								//println!("{} line {}", function_name!(), line!());
+								self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(n);
 								if inumthreads == 1 {
 									println!("{}", msg);
 								}
@@ -465,13 +556,23 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						icombinations += 1;
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
+								seq.calc_density_ratio(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::OR) {
+								seq.calc_density_or(n as usize, &avec)
+							} else if self.calcdensity.is_set(CalcDensityType::XOR) {
+								seq.calc_density_xor(n as usize, &avec)
+							} else {
+								Ratio::<i32>::new(0, 1)
+							};							
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
 								let num: String = n.separate_with_commas();
-								let msg: String = format!("{}    {}    [{}]    {}", ratio, num, vec, this_combination.len());
+								let msg: String = format!(message_format!(), ratio, num, vec, this_combination.len());
 								//println!("{} line {}", function_name!(), line!());
+								self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(n);
 								if inumthreads == 1 {
 									println!("{}", msg);
 								}
@@ -1017,7 +1118,7 @@ fn manyfactors(n: usize) -> (bool, HashSet<Vec<u32>>) {
 fn test_combinations(primes: Arc<Vec<u32>>, factor_combinations: bool, factor_slice: bool) {
     let nfinish: usize = 131072;
     // new(capacity: usize, global: bool, resize: bool)
-    let mut seq: Sequence<24> = Sequence::<24>::new(nfinish, false, false);
+    let mut seq: Sequence24 = Sequence24::new(nfinish, false, false);
     seq.set_primes(&primes);
     
 	/*
@@ -6289,7 +6390,7 @@ fn test_combinations(primes: Arc<Vec<u32>>, factor_combinations: bool, factor_sl
 /*
 fn test_divisors(primes: Arc<Vec<u32>>) {
     let nfinish: i64 = 14880;
-    let mut seq: Sequence<24> = Sequence::<24>::new(2, 2_usize.pow(nfinish.ilog2() + 1), false);
+    let mut seq: Sequence24 = Sequence24::new(2, 2_usize.pow(nfinish.ilog2() + 1), false);
     seq.set_primes(&primes);
     for n in 2..nfinish {
         let vecvec1: Vec<Vec<u32>> = seq.factor_combinations(n);
@@ -10489,7 +10590,7 @@ struct Args {
     start: u32,
     #[arg(index = 4)]
     finish: u32,
-    #[arg(short, long, default_value_t = CalcDensityType::RATIO)]
+    #[arg(index = 5)]
 	method: CalcDensityType,
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -10512,8 +10613,10 @@ struct Args {
 	//    8*32*1024 .... 262144
 	//   32*32*1024 ... 1048576
 	//   64*32*1024 ... 2097152
+	//  128*32*1024 ... 4194304
+	//  256*32*1024 ... 8388608
 	// 1024*32*1024 .. 33554432
-	#[arg(long, aliases = ["stack", "stacksize", "stack_size"], default_value_t = 32*32*1024)]
+	#[arg(long, aliases = ["stack", "stacksize", "stack_size"], default_value_t = 64*32*1024)]
     stacksize: usize,
 }
 
@@ -10533,10 +10636,10 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust 1 2 4194304 268435456
  * 
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3)]" 2 128
- * target\release\sequence_rust.exe 4 "[(1,2)]" 2 65536 --file --perf
- * target\release\sequence_rust.exe 1 "[(1,2)]" 2 1048576 --file --array --stacksize 2097152
- * target\release\sequence_rust.exe 1 "[(1,2)]" 2 4194304 --file --array --stacksize 2097152
- * target\release\sequence_rust.exe 1 "[(1,2)]" 2 8388608 --file --array
+ * target\release\sequence_rust.exe 4 "[(1,2)]" 2 65536 OR --file --perf
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 2 1048576 OR --file --array --stacksize 2097152
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 2 4194304 OR --file --array --stacksize 2097152
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 2 8388608 OR --arrayvec
  * 33554432
  * 134217728
  * target\release\sequence_rust.exe 1 "[(1,2)]" 4194304 8388608 --file --array --stacksize 1048576
@@ -10579,6 +10682,7 @@ fn print_memory(f: &str) {
 #[function_name::named]
 fn main() 
 {
+	let line_numbers: bool = false;
 	let mut bln_gt_half: bool = false;
 	let mut min_factors_len: usize = 4;
 	
@@ -10590,14 +10694,17 @@ fn main()
     }
     print_time(function_name!(), "start_time");
 	
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     let vecargs: Vec<String> = env::args().collect();
     let mut args = Args::parse();
     if let Some(fp) = args.filepath.clone().filter(|fp| fp.len() > 0) {
         args.file = true;
     }
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     if args.debug {
         println!("{:#?}", args);
     }
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     if args.perf {
         time_graph::enable_data_collection(true);
     }
@@ -10609,12 +10716,16 @@ fn main()
     //let ifinish: u32 = vecargs[4].parse::<u32>().ok().unwrap();
     let mut iminfactors: usize = 4;
 	
+	
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     // let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(args.finish.ilog2() + 1));
     let mut vecprimes1: Arc<Vec<u32>> = Arc::new(init(args.finish as u32));
     // new(i: u32, capacity: usize, global: bool, resize: bool)
 
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
     let mut vecratios1: Vec<Ratio<i32>> = Vec::new();
+	let mut outmap1: Arc<Mutex<AHashMap<Ratio<i32>, ArrayVec<[u32; 4096]>>>> = Arc::new(Mutex::new(AHashMap::new()));
 	let tuples: Vec<&str> = args.ratios.split("),(").collect();
     let half: Ratio<i32> = Ratio::<i32>::new(1, 2);
 	for tuple1 in tuples {
@@ -10627,6 +10738,7 @@ fn main()
             bln_gt_half = true;
         }
 		vecratios1.push(rat);
+		outmap1.lock().unwrap().insert(rat, ArrayVec::<[u32; 4096]>::new());
 		if den > 4 || num > 1 {
 			iminfactors = 2;
 		}
@@ -10636,6 +10748,7 @@ fn main()
         args.filepath = Some(format!("sequence {}.txt", args.ratios.replace("),(", ") (")));
     }
     
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     let mut predefined1: HashMap<u32, Vec<RatioVec>, RandomState> = HashMap::with_hasher(RandomState::new());
     for line in PREDEFINED.lines() {
         let mut vars: Vec<&str> = line.split("    ").collect();
@@ -10658,7 +10771,7 @@ fn main()
     }
 	
     /*
-    let mut seq = Sequence::<24>::new(1049520, 1049520, true);
+    let mut seq = Sequence24::new(1049520, 1049520, true);
     seq.set_primes(vecprimes1.clone());
     let vecvec1 = seq.factor_combinations(1049520);
     println!("vecvec1 = {:?}", vecvec1);
@@ -10671,14 +10784,16 @@ fn main()
     //return;
     
 	
-	if true {
+	if false {
+		if line_numbers { println!("{}() line {}", function_name!(), line!()); }
 		// target\debug\sequence_rust.exe 1 "[(1,2)]" 2 65536 --vec --stacksize 2097152
 		let builder = thread::Builder::new().stack_size(args.stacksize + args.finish as usize);
 		let outer_handle = builder.spawn(move || {
-			let mut seq1: Sequence<24> = Sequence::<24>::new(65536, false, false);
+			let mut seq1: Sequence24 = Sequence24::new(65536, false, false);
 			for n in 2..512 {
 				for this_combination in seq1.factor_combinations_vec(n as u32) {
-					let this_density: Ratio<i32> = seq1.calc_density_xor(&this_combination.iter().map(|&x| x as i32).collect());
+					let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+					let this_density: Ratio<i32> = seq1.calc_density_xor(n, &avec);
 					if *this_density.denom() <= 3 {
 						println!("{} {} {:?}", this_density, n, this_combination);
 					}
@@ -10694,7 +10809,7 @@ fn main()
 		min_factors_len = 2;
 		for n in [720, 840, 6720] {
 			for this_combination in seq1.factor_combinations_vec(n as u32) {
-				let this_density: Ratio<i32> = seq1.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+				let this_density: Ratio<i32> = seq1.calc_density(&array_vec);                    
 				//if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
 				if *this_density.denom() <= 3 {
 					println!("{} {} {:?}", this_density, n, this_combination);
@@ -10705,15 +10820,17 @@ fn main()
 	}
 	*/	
 	
-    println!("{}() num_threads={}, vec_ratios=[{}], start={}, finish={}, stacksize={}", function_name!(), args.numthreads, args.ratios.replace(" ", ""), args.start.separate_with_commas(), args.finish.separate_with_commas(), args.stacksize.separate_with_commas());
+	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
+    println!("{}() num_threads={}, vec_ratios=[{}], start={}, finish={}, method={}, stacksize={}", function_name!(), args.numthreads, args.ratios.replace(" ", ""), args.start.separate_with_commas(), args.finish.separate_with_commas(), args.method.to_string(), args.stacksize.separate_with_commas());
     println!("{}() vec={}, array={}, tinyvec={}, arrayvec={}", function_name!(), args.vec, args.array, args.tinyvec, args.arrayvec);
 	println!("{}() debug={}, perf={}, file={}{}", function_name!(), args.debug, args.perf, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
     
 	if args.numthreads == 1 {
 		
+		let outmap2 = Arc::clone(&outmap1);
 		let builder = thread::Builder::new().stack_size(args.stacksize + args.finish as usize);
 		let outer_handle = builder.spawn(move || {
-			let mut seq1: Sequence<24> = Sequence::<24>::new(std::cmp::max(args.finish as usize, 8192), false, false);
+			let mut seq1: Sequence24 = Sequence24::new(std::cmp::max(args.finish as usize, 8192), false, false);
 			seq1.bln_factors = true;
 			seq1.bln_divisors = false;
 			seq1.bln_gt_half = bln_gt_half;
@@ -10735,6 +10852,7 @@ fn main()
 				calcdensity: CalcDensityType::OR,
 				matches: vecratios1,
 				predefined: predefined1,
+				outmap: outmap2,
 				tx: if args.file { Some(tx1) } else { None },
 			};
 			print_memory(function_name!());
@@ -10775,9 +10893,10 @@ fn main()
 		
 	} else {
 	
+		let outmap2 = outmap1.clone();
 		let builder = thread::Builder::new().stack_size(args.numthreads as usize * args.stacksize);
 		let outer_handle = builder.spawn(move || {
-			let mut seq1: Sequence<24> = Sequence::<24>::new(std::cmp::max(args.finish as usize, 8192), false, false);
+			let mut seq1: Sequence24 = Sequence24::new(std::cmp::max(args.finish as usize, 8192), false, false);
 			seq1.bln_factors = true;
 			seq1.bln_divisors = false;
 			seq1.bln_gt_half = bln_gt_half;
@@ -10789,8 +10908,8 @@ fn main()
 			{
 				let mut threads = vec![];
 				for ith in 0..(args.numthreads as usize)
-				{
-					let mut seq2: Sequence<24> = Sequence::<24>::new(seq1.capacity, seq1.global, seq1.resize);
+				{					
+					let mut seq2: Sequence24 = Sequence24::new(seq1.capacity, seq1.global, seq1.resize);
 					seq2.min_factors_len = iminfactors;
 					seq2.bln_factors = seq1.bln_factors;
 					seq2.bln_divisors = seq1.bln_divisors;
@@ -10801,6 +10920,7 @@ fn main()
 					//let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
 					let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
 					let predefined2: HashMap<u32, Vec<RatioVec>, RandomState> = predefined1.clone();
+					let outmap3 = Arc::clone(&outmap2);
 					let tx2 = tx1.clone();
 					//println!("{}() line {}", function_name!(), line!());
 					threads.push(scp.spawn(move || {
@@ -10818,6 +10938,7 @@ fn main()
 							calcdensity: CalcDensityType::OR,
 							matches: vecratios2,
 							predefined: predefined2,
+							outmap: outmap3,
 							tx: if args.file { Some(tx2) } else { None },
 						};
 						if ith == args.numthreads as usize - 1 {
@@ -10886,6 +11007,11 @@ fn main()
 		
 		outer_handle.join().unwrap();
 	}
+	
+	for (key, val) in outmap1.lock().unwrap().iter_mut() {
+		val.sort();
+		println!("{}/{}: {:?}", key.numer(), key.denom(), val);
+	}
     let total_sec = t1.elapsed().as_secs_f64();
     let total_min = total_sec/60.0;
     let total_hrs = total_min/60.0;
@@ -10904,8 +11030,10 @@ fn main()
 	factor_combinations_ary ... 1672.29 (7.75%)
 	factor_combinations_tinyvec ... 19907.35 (92.25%)
 	
-	   array from 2 to 1048576 with 1 threads in 109.76 seconds ( 1.83 minutes)
-	   array from 2 to 4194304 with 1 threads in 888.47 seconds (14.81 minutes)
+	   array from 2 to 1048576 with 1 threads in 109.76 seconds ( 1.83 minutes) RATIO
+	   array from 2 to 4194304 with 1 threads in 888.47 seconds (14.81 minutes) RATIO
+	arrayvec from 2 to 4194304 with 1 threads in 913.55 seconds (15.23 minutes) RATIO
+	arrayvec from 2 to 4194304 with 1 threads in 876.43 seconds (14.61 minutes) RATIO
 	   
 	   array from 549120 to 591360 with 1 threads in  2.83-12.15-34.41 seconds
 	 tinyvec from 549120 to 591360 with 1 threads in  3.30-78.13-79.44 seconds
