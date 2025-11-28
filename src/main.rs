@@ -43,14 +43,16 @@ use std::clone::Clone;
 use std::collections::{BTreeSet, HashSet};
 use std::cmp::min;
 use std::env;
+use std::fmt;
 use std::fs::OpenOptions;
 use std::hash::Hash;
 use std::io::{self, Write};
+use std::ops::{BitOr, BitOrAssign};
 use std::process::{self, Command};
 use std::slice::Iter;
 use std::thread;
 use std::time::{Duration, Instant};
-use std::str;
+use std::str::{self, FromStr};
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicI8, AtomicI32, AtomicI64, AtomicU32, Ordering};
 use std::sync::mpsc;
@@ -97,11 +99,100 @@ struct Main {
     t1: Instant,
     astart: AtomicU32,
     afinish: AtomicU32,
+	calcdensity: CalcDensityType,
     matches: Vec<Ratio<i32>>,
     predefined: HashMap<u32, Vec<RatioVec>, RandomState>,
 	tx: Option<Sender<Option<Message>>>,
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash])]
+pub struct CalcDensityType(u8);
+
+impl CalcDensityType {
+    pub const RATIO: CalcDensityType = CalcDensityType(1 << 1);
+    pub const FRAC: CalcDensityType = CalcDensityType(1 << 1);
+    pub const FRACTION: CalcDensityType = CalcDensityType(1 << 1);
+    pub const OR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BITOR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const XOR: CalcDensityType = CalcDensityType(1 << 3);
+    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 3);
+    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 3);
+	
+	pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_uppercase().trim() {
+            "RATIO" => Some(Self::RATIO),
+            "FRAC" => Some(Self::FRAC),
+            "FRACTION" => Some(Self::FRACTION),
+            "OR" => Some(Self::OR),
+            "BITOR" => Some(Self::BITOR),
+            "BIT_OR" => Some(Self::BIT_OR),
+            "XOR" => Some(Self::XOR),
+            "BITXOR" => Some(Self::BITXOR),
+            "BIT_XOR" => Some(Self::BIT_XOR),
+            _ => None,
+        }
+    }
+	
+    pub fn is_set(&self, flag: Status) -> bool {
+        (self.0 & flag.0) != 0
+    }
+}
+
+impl BitOr for CalcDensityType {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Status(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for CalcDensityType {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+#[derive(Debug)]
+pub enum CalcDensityParseError {
+    InvalidFormat(String),
+}
+
+impl fmt::Display for CalcDensityParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CalcDensityParseError::InvalidFormat(s) => write!(f, "Invalid status format: {}", s),
+        }
+    }
+}
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.parse::<u8>() {
+            Ok(val) => Ok(CalcDensityType(val)),
+            Err(_) => Err(CalcDensityParseError::InvalidFormat(s.to_string())),
+        }
+    }
+}
+impl FromStr for CalcDensityType {
+    type Err = CalcDensityParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.trim().is_empty() {
+            return Err(StatusParseError::EmptyInput);
+        }
+        let mut combined_status = CalcDensityType::NONE;
+        for part in s.split('|') {
+            match CalcDensityType::from_name(part.trim()) {
+                Some(flag) => {
+                    combined_status = combined_status | flag;
+                }
+                None => {
+                    return Err(CalcDensityParseError::InvalidFlag(part));
+                }
+            }
+        }        
+        Ok(combined_status)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum CombinationType {
@@ -290,7 +381,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 									break;
 								}
 							}
-							let density: Ratio<i32> = seq.calc_density(&vec_combination);
+							let density: Ratio<i32> = if self.calc_density.is_set(CalcDensityType::RATIO) {
+								seq.calc_density_ratio(&vec_combination)
+							} else if self.calc_density.is_set(CalcDensityType::OR) {
+								seq.calc_density_or(n as usize, &vec_combination)
+							} else if self.calc_density.is_set(CalcDensityType::XOR) {
+								seq.calc_density_xor(n as usize, &vec_combination)
+							}							
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut vec_combination.iter(), ", ");
@@ -317,7 +414,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						//println!("icombinations = {}", icombinations);
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
@@ -342,7 +439,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						icombinations += 1;
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
@@ -368,7 +465,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						icombinations += 1;
 						if this_combination != prev_combination 
 						{
-							let density: Ratio<i32> = seq.calc_density(&this_combination.iter().map(|&x| x as i32).collect());                    
+							let density: Ratio<i32> = seq.calc_density_ratio(&this_combination.iter().map(|&x| x as i32).collect());                    
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
@@ -10392,6 +10489,8 @@ struct Args {
     start: u32,
     #[arg(index = 4)]
     finish: u32,
+    #[arg(short, long, default_value_t = CalcDensityType::RATIO)]
+	method: CalcDensityType,
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
     #[arg(short, long, default_value_t = false)]
@@ -10633,6 +10732,7 @@ fn main()
 				anumthreads: AtomicU32::new(args.numthreads as u32), 
 				astart: AtomicU32::new(args.start), 
 				afinish: AtomicU32::new(args.finish), 
+				calcdensity: CalcDensityType::OR,
 				matches: vecratios1,
 				predefined: predefined1,
 				tx: if args.file { Some(tx1) } else { None },
@@ -10715,6 +10815,7 @@ fn main()
 							anumthreads: AtomicU32::new(args.numthreads as u32), 
 							astart: AtomicU32::new(args.start), 
 							afinish: AtomicU32::new(args.finish), 
+							calcdensity: CalcDensityType::OR,
 							matches: vecratios2,
 							predefined: predefined2,
 							tx: if args.file { Some(tx2) } else { None },
@@ -10823,6 +10924,5 @@ fn main()
 		}
     }
 }
-
 
 

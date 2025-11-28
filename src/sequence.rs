@@ -30,7 +30,7 @@ use std::cmp::{max, min, PartialEq};
 use std::collections::{BTreeSet, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::ops::{BitXor, Rem};
+use std::ops::{BitOr, BitOrAssign, BitXor, Rem};
 use std::result::Result;
 use std::slice::SliceIndex;
 use std::sync::{Arc, Mutex, RwLock};
@@ -1353,25 +1353,42 @@ fn mult_vec(&mut self, mut ary: Vec<i32>) -> i32
     return ary[ilen - 1];
 }
 
-pub fn calc_density_xor(&mut self, a: &Vec<i32>) -> Ratio<i32>
+pub fn calc_density_or(&mut self, n: usize, a: &Vec<i32>) -> Ratio<i32>
 {
-	let prod: usize = a.iter().product::<i32>() as usize;
-	let mut bits = FixedBitSet::with_capacity(prod);
-	for b in (0..prod).step_by(a[0] as usize) {
+	//let n: usize = a.iter().product::<i32>() as usize;
+	let mut bits = FixedBitSet::with_capacity(n);
+	for b in (0..n).step_by(a[0] as usize) {
 		bits.set(b, true);
 	}
 	for i in 1..a.len() {
-		let mut temp = FixedBitSet::with_capacity(prod);
-		for t in (0..prod).step_by(a[i] as usize) {
+		let mut temp = FixedBitSet::with_capacity(n);
+		for t in (0..n).step_by(a[i] as usize) {
 			temp.set(t, true);
 		}
-		let bits = bits.bitxor(&temp);
+		bits |= &temp;
 	}
-	return Ratio::<i32>::new(bits.count_ones(0..prod) as i32, prod as i32);
+	return Ratio::<i32>::new(bits.count_ones(0..n) as i32, prod as i32);
+}
+
+pub fn calc_density_xor(&mut self, n: usize, a: &Vec<i32>) -> Ratio<i32>
+{
+	//let n: usize = a.iter().product::<i32>() as usize;
+	let mut bits = FixedBitSet::with_capacity(n);
+	for b in (0..n).step_by(a[0] as usize) {
+		bits.set(b, true);
+	}
+	for i in 1..a.len() {
+		let mut temp = FixedBitSet::with_capacity(n);
+		for t in (0..n).step_by(a[i] as usize) {
+			temp.set(t, true);
+		}
+		bits = bits.bitxor(&temp);
+	}
+	return Ratio::<i32>::new(bits.count_ones(0..n) as i32, prod as i32);
 }
 
 #[instrument]
-pub fn calc_density(&mut self, a: &Vec<i32>) -> Ratio<i32>
+pub fn calc_density_ratio(&mut self, a: &Vec<i32>) -> Ratio<i32>
 {
         let ilen: usize = a.len();
         let checkhalf = false;
@@ -1489,7 +1506,6 @@ pub fn calc_density(&mut self, a: &Vec<i32>) -> Ratio<i32>
 }
 
 }
-
 
 
 
