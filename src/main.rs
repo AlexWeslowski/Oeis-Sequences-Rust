@@ -446,6 +446,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						if this_combination != prev_combination 
 						{
 							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).filter(|&x| x != 0).collect();
+							/*
 							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
 								seq.calc_density_ratio(n as usize, &avec)
 							} else if self.calcdensity.is_set(CalcDensityType::OR) {
@@ -454,6 +455,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 								seq.calc_density_xor(n as usize, &avec)
 							} else {
 								Ratio::<i32>::new(0, 1)
+							};
+							*/
+							let density: Ratio<i32> = match self.calcdensity {
+								CalcDensityType::RATIO => { seq.calc_density_ratio(n as usize, &avec) },
+								CalcDensityType::OR => { seq.calc_density_or(n as usize, &avec) },
+								CalcDensityType::XOR => { seq.calc_density_xor(n as usize, &avec) },
+								_ => { Ratio::<i32>::new(0, 1) }
 							};
 							//println!("n = {}, comb = {:?}", n, this_combination);
 							//println!("n = {}, avec = {:?}", n, avec);
@@ -486,6 +494,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						if this_combination != prev_combination 
 						{
 							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							/*
 							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
 								seq.calc_density_ratio(n as usize, &avec)
 							} else if self.calcdensity.is_set(CalcDensityType::OR) {
@@ -494,6 +503,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 								seq.calc_density_xor(n as usize, &avec)
 							} else {
 								Ratio::<i32>::new(0, 1)
+							};
+							*/
+							let density: Ratio<i32> = match self.calcdensity {
+								CalcDensityType::RATIO => { seq.calc_density_ratio(n as usize, &avec) },
+								CalcDensityType::OR => { seq.calc_density_or(n as usize, &avec) },
+								CalcDensityType::XOR => { seq.calc_density_xor(n as usize, &avec) },
+								_ => { Ratio::<i32>::new(0, 1) }
 							};
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
@@ -521,6 +537,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						if this_combination != prev_combination 
 						{
 							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							/*
 							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
 								seq.calc_density_ratio(n as usize, &avec)
 							} else if self.calcdensity.is_set(CalcDensityType::OR) {
@@ -529,6 +546,13 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 								seq.calc_density_xor(n as usize, &avec)
 							} else {
 								Ratio::<i32>::new(0, 1)
+							};
+							*/
+							let density: Ratio<i32> = match self.calcdensity {
+								CalcDensityType::RATIO => { seq.calc_density_ratio(n as usize, &avec) },
+								CalcDensityType::OR => { seq.calc_density_or(n as usize, &avec) },
+								CalcDensityType::XOR => { seq.calc_density_xor(n as usize, &avec) },
+								_ => { Ratio::<i32>::new(0, 1) }
 							};
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
@@ -557,6 +581,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						if this_combination != prev_combination 
 						{
 							let avec: ArrayVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
+							/*
 							let density: Ratio<i32> = if self.calcdensity.is_set(CalcDensityType::RATIO) {
 								seq.calc_density_ratio(n as usize, &avec)
 							} else if self.calcdensity.is_set(CalcDensityType::OR) {
@@ -565,7 +590,14 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 								seq.calc_density_xor(n as usize, &avec)
 							} else {
 								Ratio::<i32>::new(0, 1)
-							};							
+							};
+							*/
+							let density: Ratio<i32> = match self.calcdensity {
+								CalcDensityType::RATIO => { seq.calc_density_ratio(n as usize, &avec) },
+								CalcDensityType::OR => { seq.calc_density_or(n as usize, &avec) },
+								CalcDensityType::XOR => { seq.calc_density_xor(n as usize, &avec) },
+								_ => { Ratio::<i32>::new(0, 1) }
+							};
 							if let Some(ratio) = self.matches.iter().find(|&x| *x == density)
 							{
 								let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
