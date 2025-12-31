@@ -562,8 +562,9 @@ for n in range(2, 374220 + 2):
         print(f"{match}    {n:,}    {[n,]}    {1}")
 
 dir = "D:\\Rust\\Sequence"
+[int(line.split("\t")[1].replace(",", "")) for line in open("{dir}\\sequence 1_2.txt").readlines() if not line.startswith("#")]
 ary = []
-with open(f"{dir}\\sequence (1,2).txt") as f:
+with open(f"{dir}\\sequence (1,3).txt") as f:
     for line in f:
 		line = line.strip()
         if len(line) <= 1:
