@@ -560,7 +560,16 @@ for n in range(2, 374220 + 2):
             print(f"{calc_density1(n, combo)}    {n:,}    {combo}    {len(combo)}")
     if not bln and fractions.Fraction(1, n) == match:
         print(f"{match}    {n:,}    {[n,]}    {1}")
-        
+
+dir = "D:\\Rust\\Sequence"
+ary = []
+with open(f"{dir}\\sequence (1,2).txt") as f:
+    for line in f:
+		line = line.strip()
+        if len(line) <= 1:
+            continue
+        n = int(line.split("\t")[1].replace(",", ""))
+        ary.append(n)
 
 # 1/2    6,720    [3, 7, 10, 32]
 hsh = collections.defaultdict(list)
