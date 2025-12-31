@@ -1,1 +1,1 @@
-"C:\Program Files\7-Zip\7z.exe" a -r -tzip sequence.zip . -xr!target x!*.zip x!*.bat
+del sequence.zip & "C:\Program Files\7-Zip\7z.exe" a -r -tzip sequence.zip . -xr!.git -xr!docs -xr!src.bak -xr!target x!*.zip x!*.bat
