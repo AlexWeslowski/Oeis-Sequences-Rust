@@ -13,6 +13,7 @@ use ahash::{AHasher, AHashMap, AHashSet, HashSetExt, RandomState};
 //use bit_vec::BitVec;
 //use crossbeam_skiplist::SkipSet;
 use crate::divisors::{self, Num};
+use crate::enums::{CalcDensityType, DataType, Backtrack};
 use fixedbitset::FixedBitSet;
 //use flurry::{Guard, HashSet};
 use function_name::named;
@@ -27,11 +28,12 @@ use num_primes::Factorization as NumPrimesFactorization;
 use prime_factorization::Factorization as PrimeFactorization;
 use primes::{Sieve, PrimeSet};
 //use seize::collector::Guard;
+use smallvec::{smallvec, SmallVec};
 use std::cmp::{max, min, PartialEq};
 use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::ops::{BitOr, BitOrAssign, BitXor, Rem};
 use std::result::Result;
@@ -47,273 +49,6 @@ use tinyvec::{array_vec, ArrayVec};
 use tinyvec::{tiny_vec, TinyVec};
 //use tinyvec::TinyVec as SequenceVec;
 
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CalcDensityType(u8);
-
-impl CalcDensityType {
-    pub const NONE: CalcDensityType = CalcDensityType(0);
-    pub const RATIO: CalcDensityType = CalcDensityType(1 << 0);
-    pub const FRAC: CalcDensityType = CalcDensityType(1 << 0);
-    pub const FRACTION: CalcDensityType = CalcDensityType(1 << 0);
-    pub const OR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const BITOR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const XOR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 2);
-	
-	#[function_name::named]
-	pub fn to_string(self) -> String {
-		let debug = false;
-		let mut s1 = String::new();
-		if debug { println!("{} line {}", function_name!(), line!()); }
-		if self.is_set(Self::RATIO) {
-			s1.push_str("RATIO|");
-		}
-		if debug { println!("{} line {}", function_name!(), line!()); }
-		if self.is_set(Self::OR) {
-			s1.push_str("OR|");
-		}
-		if debug { println!("{} line {}", function_name!(), line!()); }
-		if self.is_set(Self::XOR) {
-			s1.push_str("XOR|");
-		}
-		let ilen = s1.len();
-		let s2 = if ilen <= 1 { "" } else { &s1[..ilen - 1] };
-		s2.to_string()
-	}
-	
-	#[function_name::named]
-	pub fn from_name(name: &str) -> Option<Self> {
-		let debug = false;
-		if debug { println!("{} line {}", function_name!(), line!()); }
-        match name.to_uppercase().trim() {
-            "0" => Some(Self::NONE),
-            "NONE" => Some(Self::NONE),
-            "1" => Some(Self::RATIO),
-            "RATIO" => Some(Self::RATIO),
-            "FRAC" => Some(Self::FRAC),
-            "FRACTION" => Some(Self::FRACTION),
-            "2" => Some(Self::OR),
-            "OR" => Some(Self::OR),
-            "BITOR" => Some(Self::BITOR),
-            "BIT_OR" => Some(Self::BIT_OR),
-            "4" => Some(Self::XOR),
-            "XOR" => Some(Self::XOR),
-            "BITXOR" => Some(Self::BITXOR),
-            "BIT_XOR" => Some(Self::BIT_XOR),
-            _ => None,
-        }
-    }
-	
-	#[function_name::named]
-    pub fn is_set(&self, flag: CalcDensityType) -> bool {
-        (self.0 & flag.0) != 0
-    }
-}
-
-impl From<u8> for CalcDensityType {
-    fn from(u: u8) -> Self {
-		let mut cdt = CalcDensityType::NONE;
-		if (u | 1) != 0 {
-			cdt |= CalcDensityType::RATIO;
-		}
-		if (u | 2) != 0 {
-			cdt |= CalcDensityType::OR;
-		}
-		if (u | 4) != 0 {
-			cdt |= CalcDensityType::XOR;
-		}
-		cdt
-    }
-}
-
-impl BitOr for CalcDensityType {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self::Output {
-        CalcDensityType(self.0 | rhs.0)
-    }
-}
-
-impl BitOrAssign for CalcDensityType {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-
-#[derive(Debug)]
-pub enum CalcDensityParseError {
-    EmptyInput(String),
-    InvalidFlag(String),
-    InvalidFormat(String),
-}
-
-impl fmt::Display for CalcDensityParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CalcDensityParseError::EmptyInput(s) => write!(f, "Empty input"),
-            CalcDensityParseError::InvalidFlag(s) => write!(f, "Invalid flag: {}", s),
-            CalcDensityParseError::InvalidFormat(s) => write!(f, "Invalid format: {}", s),
-        }
-    }
-}
-
-impl Error for CalcDensityParseError {
-}
-
-impl fmt::Display for CalcDensityType {
-	#[function_name::named]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let debug = false;
-		if debug { println!("{} line {}", function_name!(), line!()); }
-        write!(f, "{}", self.to_string())
-    }
-}
-
-impl FromStr for CalcDensityType {
-    type Err = CalcDensityParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() {
-            return Err(CalcDensityParseError::EmptyInput("".to_string()));
-        }
-        let mut combined_type = CalcDensityType::NONE;
-        for part in s.split('|') {
-            match CalcDensityType::from_name(part.trim()) {
-                Some(flag) => {
-                    combined_type = combined_type | flag;
-                }
-                None => {
-                    return Err(CalcDensityParseError::InvalidFlag(part.to_string()));
-                }
-            }
-        }        
-        Ok(combined_type)
-    }
-}
-
-
-
-
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DataType(u8);
-
-impl DataType {
-    pub const NONE: DataType = DataType(0);
-	pub const ARY: DataType = DataType(1 << 0);
-    pub const ARRAY: DataType = DataType(1 << 0);
-    pub const TINYVEC: DataType = DataType(1 << 1);
-    pub const ARRAYVEC: DataType = DataType(1 << 2);
-    pub const VEC: DataType = DataType(1 << 3);
-	pub const VECTOR: DataType = DataType(1 << 3);
-	
-	#[function_name::named]
-	pub fn to_string(self) -> String {
-		let mut s1 = String::new();
-		if self.is_set(Self::ARRAY) { s1.push_str("ARRAY|"); }
-		if self.is_set(Self::TINYVEC) { s1.push_str("TINYVEC|"); }
-		if self.is_set(Self::ARRAYVEC) { s1.push_str("ARRAYVEC|"); }
-		if self.is_set(Self::VEC) { s1.push_str("VEC|"); }
-		let ilen = s1.len();
-		let s2 = if ilen <= 1 { "" } else { &s1[..ilen - 1] };
-		s2.to_string()
-	}
-	
-	#[function_name::named]
-	pub fn from_name(name: &str) -> Option<Self> {
-		let debug = false;
-		if debug { println!("{} line {}", function_name!(), line!()); }
-        match name.to_uppercase().trim() {
-            "0" => Some(Self::NONE),
-            "NONE" => Some(Self::NONE),
-            "1" => Some(Self::ARRAY),
-			"ARY" => Some(Self::ARY),
-            "ARRAY" => Some(Self::ARRAY),
-            "2" => Some(Self::TINYVEC),
-            "TINYVEC" => Some(Self::TINYVEC),
-            "4" => Some(Self::ARRAYVEC),
-            "ARRAYVEC" => Some(Self::ARRAYVEC),
-            "8" => Some(Self::VEC),
-            "VEC" => Some(Self::VEC),
-            "VECTOR" => Some(Self::VECTOR),
-            _ => None,
-        }
-    }
-	
-	#[function_name::named]
-    pub fn is_set(&self, flag: DataType) -> bool {
-        (self.0 & flag.0) != 0
-    }
-}
-
-impl From<u8> for DataType {
-    fn from(u: u8) -> Self {
-		let mut cdt = DataType::NONE;
-		if (u | 1) != 0 { cdt |= DataType::ARRAY; }
-		if (u | 2) != 0 { cdt |= DataType::TINYVEC; }
-		if (u | 4) != 0 { cdt |= DataType::ARRAYVEC; }
-		if (u | 8) != 0 { cdt |= DataType::VEC; }
-		cdt
-    }
-}
-
-impl BitOr for DataType {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self::Output {
-        DataType(self.0 | rhs.0)
-    }
-}
-
-impl BitOrAssign for DataType {
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 |= rhs.0;
-    }
-}
-
-#[derive(Debug)]
-pub enum DataTypeParseError {
-    EmptyInput(String),
-    InvalidFlag(String),
-    InvalidFormat(String),
-}
-
-impl fmt::Display for DataTypeParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DataTypeParseError::EmptyInput(s) => write!(f, "Empty input"),
-            DataTypeParseError::InvalidFlag(s) => write!(f, "Invalid flag: {}", s),
-            DataTypeParseError::InvalidFormat(s) => write!(f, "Invalid format: {}", s),
-        }
-    }
-}
-
-impl Error for DataTypeParseError {
-}
-
-impl fmt::Display for DataType {
-	#[function_name::named]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		let debug = false;
-		if debug { println!("{} line {}", function_name!(), line!()); }
-        write!(f, "{}", self.to_string())
-    }
-}
-
-impl FromStr for DataType {
-    type Err = DataTypeParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.trim().is_empty() { return Err(DataTypeParseError::EmptyInput("".to_string())); }
-        let mut combined_type = DataType::NONE;
-        for part in s.split('|') {
-            match DataType::from_name(part.trim()) {
-                Some(flag) => { combined_type = combined_type | flag; }
-                None => { return Err(DataTypeParseError::InvalidFlag(part.to_string())); }
-            }
-        }        
-        Ok(combined_type)
-    }
-}
 
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -390,6 +125,20 @@ const ARYSIZE: usize = 24;
 const FACTORSIZE: usize = 24;
 const DIVISORSIZE: usize = <i32 as Num>::ARYSIZE;
 
+//pub const PRIMES_SIZE: usize = 8388608;
+pub const PRIMES_SIZE: usize = 524288;
+//pub type PrimesType = TinyVec<[u32; PRIMES_SIZE]>;
+pub type PrimesType = Vec<u32>;
+
+type FactorsType = TinyVec<[i32; ARYSIZE]>;
+type StackType = TinyVec<[(i32, i32, FactorsType); 512]>;
+type FactorsVecType = TinyVec<[i32; ARYSIZE]>;
+type StackVecType = Vec<(i32, i32, FactorsVecType)>;
+type FactorCombinationsVecType = Vec<FactorsType>;
+type FactorCombinationsTinyType = TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>;
+type FactorCombinationsArrayType = ArrayVec<[TinyVec<[i32; ARYSIZE]>; 16384]>;
+type FactorCombinationsSmallType = SmallVec<[TinyVec<[i32; ARYSIZE]>; 256]>;
+
 generate_map!(MapI32, u32, i32, ARYSIZE);
 generate_map!(MapU32, u32, u32, ARYSIZE);
 generate_map!(MapDivisors, u32, u32, DIVISORSIZE);
@@ -399,27 +148,336 @@ generate_map!(MapI64, u64, i64, ARYSIZE);
 generate_map!(MapU64, u64, u64, ARYSIZE);
 
 
+
+
+/*
+combinations_smallvec: SmallVec<[TinyVec<[i32; ARYSIZE]>; 256]>,
+combinations_tinyvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
+combinations_arrayvec: ArrayVec<[TinyVec<[i32; ARYSIZE]>; 16384]>,
+*/
+pub trait TryReserve {
+    fn try_reserve(&mut self, sz: usize);
+}
+impl TryReserve for SmallVec<[TinyVec<[i32; ARYSIZE]>; 256]> {
+	fn try_reserve(&mut self, sz: usize) {
+		//println!("SmallVec self.len() = {}, self.capacity() = {}", self.len(), self.capacity());
+		self.reserve(sz);
+	}
+}
+impl TryReserve for TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]> {
+    fn try_reserve(&mut self, _: usize) {
+		//println!("TinyVec self.len() = {}, self.capacity() = {}", self.len(), self.capacity());
+    }
+}
+impl TryReserve for ArrayVec<[TinyVec<[i32; ARYSIZE]>; 16384]> {
+    fn try_reserve(&mut self, _: usize) {
+		//println!("ArrayVec self.len() = {}, self.capacity() = {}", self.len(), self.capacity());
+    }
+}
+
+pub trait SortUnstable {
+	fn sort_unstable(&mut self);
+}
+impl SortUnstable for [i32; ARYSIZE] {
+	fn sort_unstable(&mut self) {
+		self.sort_unstable_by_key(|&x| (x == 0, x));
+	}
+}
+
+/*
+for tpl in [("ary", "[u32; ARYSIZE]", "u32"), ("arrayvec", "ArrayVec<[i32; ARYSIZE]>", "i32"), ("tinyvec", "TinyVec<[i32; ARYSIZE]>", "i32"), ("smallvec", "SmallVec<[i32; ARYSIZE]>", "i32"), ("vec", "Vec<u32>", "u32")]:
+	print(f"""fn is_divisible_{tpl[0]}(factors: &{tpl[1]}, factors_len: usize, fact: {tpl[2]}) -> bool {{
+	if factors_len == 0 {{
+		return false;
+	}}
+	unsafe {{
+		for i in 0..factors_len {{
+			if *factors.get_unchecked(i) > fact {{
+				if *factors.get_unchecked(i) % fact == 0 {{
+					return true;
+				}}
+			}} else {{
+				if fact % *factors.get_unchecked(i) == 0 {{
+					return true;
+				}}
+			}}
+		}}
+		return false;
+	}}
+}}\n\n""")
+*/
+
+macro_rules! generate_isdivisible_fn {
+    ($fn_name:ident, $factors_type:ty) => {
+		fn $fn_name(factors: &$factors_type, factors_len: usize, fact: i32) -> bool {
+			if factors_len == 0 {
+				return false;
+			}
+			unsafe {
+				for i in 0..factors_len {
+					if *factors.get_unchecked(i) > fact {
+						if *factors.get_unchecked(i) % fact == 0 {
+							return true;
+						}
+					} else {
+						if fact % *factors.get_unchecked(i) == 0 {
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+		}
+	}
+}
+
+macro_rules! generate_backtrack_stack_fn {
+    ($fn_name:ident, $stack_type:ty, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident) => {
+		#[function_name::named]
+		pub fn $fn_name(&mut self, istart: i32, itarget: i32, factors: $factors_type) {
+			/*
+			if istart >= 549000 {
+				println!("{}() line {}, istart = {}, itarget = {}, factors = {:?}, factors.len() = {}", function_name!(), line!(), istart, itarget, factors, factors.len());
+			}
+			*/
+			let mut stack: TinyVec<[(i32, i32, $factors_type); 512]> = TinyVec::<[(i32, i32, $factors_type); 512]>::new();
+			stack.push((istart, itarget, factors));
+			while let Some((_, current_target, mut current_factors)) = stack.pop() {
+				if current_target == 1 {
+					if current_factors.len() >= self.min_factors_len && current_factors.len() <= self.max_factors_len {
+						current_factors.sort_unstable();
+						if self.$combinations_field.iter().find(|&x| *x == current_factors).is_none() {
+							if self.$combinations_field.len() == self.$combinations_field.capacity() {
+								self.$combinations_field.try_reserve(64);
+							}
+							self.$combinations_field.push(current_factors.clone());
+						}
+					}
+				} else {
+					if unsafe { self.bitprimes.contains_unchecked(current_target as usize) } {
+						if !Self::$is_divisible_fn(&current_factors, current_factors.len(), current_target) {
+							let mut new_factors = current_factors.clone();
+							new_factors.push(current_target);
+							stack.push((current_target, 1, new_factors));
+						}
+					} else {
+						if self.bln_exhaustive_search {
+							let mut i = istart;
+							while i * i <= current_target {
+								if current_target % i == 0 && !Self::$is_divisible_fn(&current_factors, current_factors.len(), i) {
+									let mut new_factors = current_factors.clone();
+									new_factors.push(i);
+									stack.push((i, current_target / i, new_factors));
+								}
+								i += 1;
+							}
+						} else {
+							let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = if self.bln_divisor_gen { self.divisor_gen(current_target) } else { divisors::get_divisors(current_target) };
+							let lastfactor = if current_factors.len() > 0 { unsafe { *current_factors.get_unchecked(current_factors.len() - 1) } } else { 0 };
+							let i = if !self.bln_gt_half && vecdivisors[0] == 2 { 1 } else { 0 };
+							for idx in i..vecdivisors.len() {
+								let idiv = unsafe { *vecdivisors.get_unchecked(idx) as i32 };
+								if current_factors.len() < self.max_factors_len && idiv > lastfactor && !Self::$is_divisible_fn(&current_factors, current_factors.len(), idiv) {
+									let mut new_factors = current_factors.clone();
+									new_factors.push(idiv);
+									stack.push((idiv, current_target / idiv, new_factors));
+								}
+							}
+							if stack.len() > self.max_stack_len {
+								self.max_stack_len = stack.len();
+							}
+						}
+					}
+				}
+			}
+		}
+    }
+}
+
+
+macro_rules! generate_backtrack_recurse_fn {
+    ($fn_name:ident, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident) => {
+		#[function_name::named]
+		//pub fn $fn_name(&mut self, locks: &[Mutex<()>], mut idepth: usize, istart: i32, itarget: i32, factors: &mut $factors_type) {
+        pub fn $fn_name(&mut self, istart: i32, itarget: i32, factors: &mut $factors_type) {
+			/*
+			if self.n >= 549000 {
+				println!("{}() line {}, istart = {}, itarget = {}, factors = {:?}, factors.len() = {}", function_name!(), line!(), istart, itarget, factors, factors.len());
+			}
+			*/
+            //let _t0 = std::time::Instant::now();
+			// idepth += 1;
+			// let mut ilocks = 0;
+			// for i in 0..(idepth - 1) {
+				// match locks[i].try_lock() {
+					// Ok(guard) => {
+					// }
+					// Err(_) => {
+						// ilocks += 1;
+					// }
+				// }
+			// }
+			// let _guard = locks[idepth - 1].lock().unwrap();
+			// 1,145,760	[3, 7, 11, 32, 155]
+			// 1,317,120	[3, 5, 32, 49, 56]
+			// 
+			// 3 * 7 * 11 * 4960 = 1145760
+			// 3 * 7 * 11 * 1736 =  401016 
+			// 
+			// C++,  n = 1145760, target = 4960, idepth = 4, factors = [3, 7, 11]
+			// C++,  n = 1145760, target = 4960, idepth = 4, vec_divisors = [2, 4, 5, 8, 10, 16, 20, 31, 32, 40, 62, 80, 124, 155, 160, 248, 310, 496, 620, 992, 1240, 2480, 4960]
+			// C++,  n = 1145760, target = 310, factors = [3, 7, 11, 16]
+			// C++,  n = 1145760, target = 310, vec_divisors = [2, 5, 10, 31, 62, 155, 310]
+			// C++,  n = 1145760, target = 155, factors = [3, 7, 11, 32]
+			// C++,  n = 1145760, target = 155, vec_divisors = [5, 31, 155]
+			// C++,  n = 1145760, target = 1, factors = [3, 7, 11, 32, 155]
+			// Rust, n = 1145760, itarget = 1736, ilocks = 3, idepth = 4, factors = [3, 7, 11]
+			// Rust, n = 1145760, itarget = 1736, idepth = 4, factors = [3, 7, 11], vecdivisors = [2, 4, 7, 8, 14, 28, 31, 56, 62, 124, 217, 248, 434, 868, 1736]
+			// Rust, n = 1145760,  itarget = 93 (3*31), factors = [3, 7, 11, 32]
+			// target\debug\sequence_rust.exe 1 "[(1,2)]" 1145750 1145770 RATIO tinyvec --stacksize 33554432
+			// let (is_match, fact0, fact1, fact2) = match self.n {
+				// 833280		=> (true, 3, 7, 10),
+				// 954240 		=> (true, 3, 7, 10),
+				// 1145760     => (true, 3, 7, 11),
+				// 1317120     => (true, 3, 5, 32),
+				// 1666560     => (true, 3, 5, 31),
+				// 1908480     => (true, 3, 5, 28),
+				// _           => (false, 0, 0, 0),
+			// };
+			// if is_match {
+				// let s = format!("n = {}, istart = {}, itarget = {}, idepth = {}, factors = {:?}", self.n, istart, itarget, idepth, factors);
+				// if let Some(ref mut f) = self.$file_field {
+					// writeln!(f, "{}", s).ok();
+				// } else if factors.len() >= 4 && factors[0..3] == [fact0, fact1, fact2] && (itarget == 1 || itarget > 32) {
+					// println!("{}", s);
+				// } else if itarget >= 155 {
+					// println!("{}", s);
+				// }
+			// }
+            if itarget == 1 {
+                if factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len {
+					let mut factors_clone = factors.clone();
+                    factors_clone.sort_unstable();
+                    if false {
+                        if let Some(ref mut f) = self.$file_field {
+                            let _ = writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
+                        }
+                    }
+                    if self.$combinations_field.iter().find(|&x| *x == factors_clone).is_none() {
+						if self.$combinations_field.len() == self.$combinations_field.capacity() {
+							self.$combinations_field.try_reserve(64);
+						}
+                        self.$combinations_field.push(factors_clone);
+                    }
+                }
+            } else {
+				//println!("{}() line {}, itarget = {}, capacity = {}, bitprimes.len() = {}", function_name!(), line!(), itarget, self.capacity, self.bitprimes.len());
+				if unsafe { self.bitprimes.contains_unchecked(itarget as usize) } {
+					if !Self::$is_divisible_fn(&factors, factors.len(), itarget) {
+						factors.push(itarget);
+						self.$fn_name(itarget, 1, factors);
+						//self.$fn_name(locks, idepth, itarget, 1, factors);
+						factors.pop();
+					}
+				} else {
+					//println!("{}() line {}, itarget = {}, bln_exhaustive_search = {}", function_name!(), line!(), itarget, self.bln_exhaustive_search);
+					if self.bln_exhaustive_search {
+						let mut i = istart;
+						while i * i <= itarget {
+							if itarget % i == 0 && !Self::$is_divisible_fn(&factors, factors.len(), i) {
+								factors.push(i as i32);
+								self.$fn_name(i, itarget / i, factors);
+								//self.$fn_name(locks, idepth, i, itarget / i, factors);
+								factors.pop();
+							}
+							i += 1;
+						}
+					} else {
+						//println!("{}() line {}, itarget = {}", function_name!(), line!(), itarget);
+						let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = if self.bln_divisor_gen { self.divisor_gen(itarget) } else { divisors::get_divisors(itarget) };
+						let lastfactor = if factors.len() > 0 { unsafe { *factors.get_unchecked(factors.len() - 1) } } else { 0 };
+						// if is_match {
+							// //format!("{}() line {}, itarget = {}, divisors = {:?}", function_name!(), line!(), itarget, vecdivisors);
+							// let s = format!("n = {}, istart = {}, itarget = {}, idepth = {}, factors = {:?}, divisors = {:?}", self.n, istart, itarget, idepth, factors, vecdivisors);
+							// //format!("idepth = {}, factors = {:?}, factors[{}] = {}", idepth, factors, factors.len() - 1, lastfactor);
+							// if let Some(ref mut f) = self.$file_field {
+								// writeln!(f, "{}", s).ok();
+							// } else if factors.len() >= 3 && factors[0..3] == [fact0, fact1, fact2] {
+								// println!("{}", s);
+							// }
+						// }
+						let i = if !self.bln_gt_half && vecdivisors[0] == 2 { 1 } else { 0 };
+						for idx in i..vecdivisors.len() {
+							let idiv = unsafe { *vecdivisors.get_unchecked(idx) as i32 };
+							if factors.len() < self.max_factors_len && idiv > lastfactor && !Self::$is_divisible_fn(&factors, factors.len(), idiv) {
+								factors.push(idiv);
+								self.$fn_name(idiv, itarget / idiv, factors);
+								//self.$fn_name(locks, idepth, idiv, itarget / idiv, factors);
+								factors.pop();
+							}
+						}
+						
+						if false && factors.len() < self.max_factors_len && !Self::$is_divisible_fn(&factors, factors.len(), itarget) {
+							factors.push(itarget as i32);
+							self.$fn_name(itarget, 1, factors);
+							//self.$fn_name(locks, idepth, itarget, 1, factors);
+							factors.pop();
+						}
+					}
+				}
+            }
+        }
+    };
+}
+
+macro_rules! generate_factor_combinations_fn {
+    ($fn_name:ident, $rtn_type:ty, $factors_type:ty, $combinations:ident, $backtrack_stack:ident, $backtrack_recurse:ident) => {
+		#[function_name::named]
+		#[instrument]
+		pub fn $fn_name(&mut self, i: i32) -> $rtn_type
+		{
+			self.n = i;
+			self.$combinations.clear();
+			let mut factors: $factors_type = TinyVec::new();
+			if self.backtrack == Backtrack::Stack {
+				self.$backtrack_stack(2, i, factors.clone());
+			} else {
+				self.$backtrack_recurse(2, i, &mut factors);
+			}
+			if self.bln_debug && self.$combinations.len() > 3 {
+				self.max_combinations.push(self.$combinations.len());
+			} else if self.$combinations.len() > self.max_combinations[self.max_combinations.len() - 1] {
+				self.max_combinations.push(self.$combinations.len());
+			}
+			if self.max_stack_len > self.max_stack[self.max_stack.len() - 1] {
+				self.max_stack.push(self.max_stack_len);
+			}
+			return self.$combinations.clone();
+		}
+	};
+}
+	
 pub struct Sequence24
 {
     n: i32,
     pub min_factors_len: usize,
     pub max_factors_len: usize,
+	pub max_stack_len: usize,
     pub capacity: usize,
     capacity_sqrt: u32,
     half: Ratio<i32>,
     one: Ratio<i32>,
     pub datatype: DataType,
 	pub calcdensity: CalcDensityType,
-    //combinations_vec: TinyVec<[TinyVec<[u32; ARYSIZE]>; 1024]>,
+    combinations_smallvec: SmallVec<[TinyVec<[i32; ARYSIZE]>; 256]>,
     combinations_tinyvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
-    combinations_arrayvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
+    combinations_arrayvec: ArrayVec<[TinyVec<[i32; ARYSIZE]>; 16384]>,
 	combinations_ary: TinyVec<[[i32; ARYSIZE]; 1024]>, 
 	combinations_vec: Vec<TinyVec<[i32; ARYSIZE]>>,
-    //combinations_tinyvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>,
-    //combinations_arrayvec: SequenceVec<ArrayVec<[i32; ARYSIZE]>>,
-	//combinations_ary: SequenceVec<[u32; ARYSIZE]>,
 	pub max_combinations: Vec<usize>,
+    pub max_stack: Vec<usize>,
 	backtrack_vec_file: Option<std::fs::File>,
+    backtrack_smallvec_file: Option<std::fs::File>,
 	backtrack_tinyvec_file: Option<std::fs::File>,
 	backtrack_arrayvec_file: Option<std::fs::File>,
 	backtrack_ary_file: Option<std::fs::File>,
@@ -429,15 +487,20 @@ pub struct Sequence24
 	pub bits1: FixedBitSet,
     //setprimes: Arc<HashSet<i64, RandomState>>,
     pub bitprimes: FixedBitSet,
-    //vecprimes: Arc<Vec<u32>>,
+    //vecprimes: Arc<PrimesType>,
     //pub factors: Mutex<MapFactors>,
     //pub factor_slices: MapU32,
     //pub divisors: Mutex<MapU32>,
-    //vecprimes: Arc<Mutex<Vec<u32>>>,
+    //vecprimes: Arc<Mutex<PrimesType>>,
     pub factors: Arc<Mutex<MapFactors>>,
     pub factor_slices: Arc<Mutex<MapFactorSlices>>,
     pub divisors: Arc<Mutex<MapDivisors>>,
-    pub exhaustive_search: bool,
+    
+	pub backtrack: Backtrack,
+    pub bln_debug: bool,
+    pub bln_perf: bool,
+    pub bln_divisor_gen: bool,
+    pub bln_exhaustive_search: bool,
     pub global: bool,
     pub resize: bool,
     pub bln_gt_half: bool,
@@ -450,8 +513,8 @@ lazy_static! {
     static ref BlnInit: Mutex<bool> = Mutex::new(false);
     static ref BlnPrimes: Mutex<bool> = Mutex::new(false);
     
-    static ref LcmMapCapacity: AtomicUsize = AtomicUsize::new(1048576); 
-    static ref LcmMap: Mutex<HashMap<(i32, i32), i32, RandomState>> = Mutex::new(HashMap::with_hasher(RandomState::new()));
+    //static ref LcmMapCapacity: AtomicUsize = AtomicUsize::new(1048576); 
+    //static ref LcmMap: Mutex<HashMap<(i32, i32), i32, RandomState>> = Mutex::new(HashMap::with_hasher(RandomState::new()));
     
     //static ref FactorsCapacity: AtomicUsize = AtomicUsize::new(536870912); 
     static ref Factors: Mutex<MapFactors> = Mutex::new(MapFactors::new(1023, 1024, true));
@@ -461,7 +524,7 @@ lazy_static! {
     //static ref DivisorsCapacity: AtomicUsize = AtomicUsize::new(1023); 
     static ref Divisors: Mutex<MapDivisors> = Mutex::new(MapDivisors::new(1023, 1048576, true));
     
-    static ref VecPrimes: Mutex<Vec<u32>> = Mutex::new(Vec::<u32>::new());
+    static ref VecPrimes: Mutex<PrimesType> = Mutex::new(Vec::<u32>::new());
     
     pub static ref Perf: Mutex<AHashMap<&'static str, f64>> = Mutex::new(AHashMap::new());
 }
@@ -489,7 +552,7 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
     //2752512/4408320 = 0.62
     let i1 = (0.24 * capacity as f32) as usize;
     let i2 = min(2_usize.pow(i1.ilog2() + 1), 2_usize.pow(26));
-    LcmMapCapacity.store(i2, Ordering::Relaxed);
+    //LcmMapCapacity.store(i2, Ordering::Relaxed);
     // 536870912/4408320 = 122
     //1370015373/4408320 = 311
     //2808531504/4408320 = 637
@@ -512,23 +575,23 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
         n: 2,
         min_factors_len: 4,
         max_factors_len: 10,
+		max_stack_len: 0,
         capacity: capacity,
         capacity_sqrt: capacity.isqrt() as u32,
         half: Ratio::<i32>::new(1, 2), 
         one: Ratio::<i32>::new(1, 1),
         datatype: dt,
         calcdensity: cdt,
-        //combinations_vec: TinyVec::<[TinyVec<[u32; ARYSIZE]>; 1024]>::new(), 
 		combinations_vec: Vec::<TinyVec<[i32; ARYSIZE]>>::with_capacity(1024), 
-		//combinations_tinyvec: tiny_vec!([(); N].map(|_| 0u32)),
 		combinations_tinyvec: TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new(),
-		//combinations_arrayvec: SequenceVec::<ArrayVec<[i32; ARYSIZE]>>::with_capacity(1024),
-		combinations_arrayvec: TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new(),
-		//combinations_ary: SequenceVec::<[u32; ARYSIZE]>::with_capacity(1024), 
+		combinations_arrayvec: ArrayVec::<[TinyVec<[i32; ARYSIZE]>; 16384]>::new(),
+        combinations_smallvec: SmallVec::<[TinyVec<[i32; ARYSIZE]>; 256]>::new(),
 		combinations_ary: TinyVec::<[[i32; ARYSIZE]; 1024]>::new(), 
 		max_combinations: vec![0],
+		max_stack: vec![0],
 		backtrack_vec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_vec.txt").unwrap()) } else { None },
-		backtrack_tinyvec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_tinyvec.txt").unwrap()) } else { None },
+        backtrack_smallvec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_smallvec.txt").unwrap()) } else { None },
+		backtrack_tinyvec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_tinyvec.txt").unwrap()) } else { None },
 		backtrack_arrayvec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_arrayvec.txt").unwrap()) } else { None },
 		backtrack_ary_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_ary.txt").unwrap()) } else { None },
         //lcm_map: Mutex::new(HashMap::<(i64, i64), i64, RandomState>::new()),
@@ -538,13 +601,18 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
 		bits1: FixedBitSet::with_capacity(max(524288, capacity/8)),
         //setprimes: Arc::new(HashSet::<i64, RandomState>::new()), 
         bitprimes: FixedBitSet::with_capacity(capacity + 1),
-        //vecprimes: Arc::new(Vec::<u32>::new()), 
+        //vecprimes: Arc::new(TinyVec::new()), 
         factors: if bln_factors { Arc::new(Mutex::new(MapFactors::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactors::new(capacity/8, capacity/4, resize))) },
         factor_slices: if bln_factor_slices { Arc::new(Mutex::new(MapFactorSlices::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactorSlices::new(capacity/8, capacity/4, resize))) },
         divisors: Arc::new(Mutex::new(MapDivisors::new(k1, capacity, resize))),
-        exhaustive_search: false,
+        
+		backtrack: Backtrack::Recurse,
+        bln_debug: false,
+        bln_perf: false,
+        bln_divisor_gen: false,
+        bln_exhaustive_search: false,
         global: global,
-        resize: resize,
+        resize: resize,        
         bln_gt_half: false,
         bln_divisors: bln_divisors,
         bln_factors: bln_factors,
@@ -552,7 +620,7 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
     }
 }
 
-pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>) 
+pub fn set_primes(&mut self, arc_primes: &Arc<PrimesType>) 
 {
 	//self.bitprimes = FixedBitSet::with_capacity(self.capacity + 1);
     //self.bitprimes = FixedBitSet::with_capacity((primes[primes.len() - 1] + 1) as usize);
@@ -568,849 +636,95 @@ pub fn set_primes(&mut self, arc_primes: &Arc<Vec<u32>>)
     //let vec_primes: Vec<u32> = Arc::try_unwrap(arc_primes).unwrap_or_else(|arc| (*arc).clone());
     //*VecPrimes.lock().unwrap() = primes;
 	let isqrt = arc_primes.len().isqrt();
-    *VecPrimes.lock().unwrap() = arc_primes[0..isqrt].to_vec();
+	*VecPrimes.lock().unwrap() = arc_primes[0..isqrt].to_vec();
+	/*
+	let mut vec = VecPrimes.lock().unwrap();
+	for p in &arc_primes[0..isqrt] {
+		vec.push(*p);
+	}
+	*/
     *bln = true;
-    self.init();
-}
-
-pub fn init(&mut self)
-{
-    let mut bln = BlnInit.lock().unwrap();
-    if *bln {
-        return;
-    }
-    let icapacity = self.capacity as u32;
-    let isqrtcapacity = icapacity.isqrt();
-    /*
-    if VecPrimes.lock().unwrap().len() <= 1
-    {
-        let mut pset = Sieve::new();
-        for p in pset.iter()
-        {
-            let ip = p as i64;
-            VecPrimes.lock().unwrap().insert(ip);
-            if ip > capacity
-            {
-                break;
-            }
-        }
-    }
-    */
-    let mut factors = Factors.lock().unwrap();
-    let mut factor_slices = FactorSlices.lock().unwrap();
-	// TinyVec<[u32; DIVISORSIZE]>
-    let mut divisors = Divisors.lock().unwrap();
-    let len = VecPrimes.lock().unwrap().len();
-    for i in 0..len {
-        let p1 = VecPrimes.lock().unwrap()[i];
-        //factors.insert(p1 as u64, vec![p1, 1]);
-        //divisors.insert(p1 as u64, vec![1, p1]);
-        let mut factors2_vec: TinyVec<[Factor; FACTORSIZE]> = tiny_vec![Factor { i: 0, exp: 1 }, Factor { i: 0, exp: 1 }];
-        let mut factorslices2_vec: TinyVec<[u32; FACTORSIZE]> = tiny_vec![0, 0];
-        let mut divisors2_vec: TinyVec<[u32; DIVISORSIZE]> = tiny_vec![0, 0];
-        for j in 0..len {
-            let p2 = VecPrimes.lock().unwrap()[j];
-            let iproduct = p1 * p2;
-            if iproduct > isqrtcapacity {
-                break;
-            } else {
-                //divisors2_vec[0] = 1;
-                //divisors2_vec[3] = p2 * p1;
-                if p1 == p2 {
-                    if self.bln_factors { factors.insert(iproduct as u32, tiny_vec![Factor { i: p1, exp: 2 }]); }
-                    if self.bln_factor_slices { factor_slices.insert(iproduct as u32, tiny_vec![p1, p1]); }
-					let mut vec: TinyVec<[u32; DIVISORSIZE]> = TinyVec::new();
-					vec.push(p1);
-                    divisors.insert(iproduct as u32, vec);
-                } else {
-                    factors2_vec[0].i = p1;
-                    factors2_vec[1].i = p2;
-                    factorslices2_vec[0] = p1;
-                    factorslices2_vec[1] = p2;
-                    divisors2_vec[0] = p1;
-                    divisors2_vec[1] = p2;
-                    if self.bln_factors { factors.insert(iproduct as u32, factors2_vec.clone()); }
-                    if self.bln_factor_slices { factor_slices.insert(iproduct as u32, factorslices2_vec.clone()); }
-                    divisors.insert(iproduct as u32, divisors2_vec.clone());
-                }
-            }
-            
-            let mut factors3_vec: TinyVec<[Factor; FACTORSIZE]> = tiny_vec![Factor { i: 0, exp: 1 }, Factor { i: 0, exp: 1 }, Factor { i: 0, exp: 1 }];
-            let mut factorslices3_vec: TinyVec<[u32; ARYSIZE]> = tiny_vec![0, 0, 0];
-            let mut divisors3_vec: TinyVec<[u32; DIVISORSIZE]> = tiny_vec![0, 0, 0, 0, 0, 0];
-            for k in 0..len {
-                let p3 = VecPrimes.lock().unwrap()[k];
-                let iproduct = p1 * p2 * p3;
-                if iproduct > isqrtcapacity {
-                    break;
-                } else {
-                    //divisors3_vec[0] = 1;
-                    //divisors3_vec[3] = p3 * p2 * p1;
-                    if (p1 == p2 && p1 == p3) {
-                        if self.bln_factors { factors.insert(iproduct as u32, tiny_vec![Factor { i: p1, exp: 3 }]); }
-                        if self.bln_factor_slices { factor_slices.insert(iproduct as u32, tiny_vec![p1, p1, p1]); }
-						let mut vec: TinyVec<[u32; DIVISORSIZE]> = TinyVec::new();
-						vec.push(p1);
-						vec.push(p1*p1);
-                        divisors.insert(iproduct as u32, vec);
-                    } else if (p1 == p2) {
-                        if self.bln_factors { factors.insert(iproduct as u32, tiny_vec![Factor { i: p1, exp: 2 }, Factor { i: p3, exp: 1 }]); }
-                        if self.bln_factor_slices { factor_slices.insert(iproduct as u32, tiny_vec![p1, p1, p3]); }
-						let mut vec: TinyVec<[u32; DIVISORSIZE]> = TinyVec::new();
-						vec.push(p1);
-						vec.push(p3);
-						vec.push(p1*p1);
-						vec.push(p1*p3);
-                        divisors.insert(iproduct as u32, vec);
-                    } else if (p2 == p3) {
-                        if self.bln_factors { factors.insert(iproduct as u32, tiny_vec![Factor { i: p1, exp: 1 }, Factor { i: p2, exp: 2 }]); }
-                        if self.bln_factor_slices { factor_slices.insert(iproduct as u32, tiny_vec![p1, p2, p2]); }
-						let mut vec: TinyVec<[u32; DIVISORSIZE]> = TinyVec::new();
-						vec.push(p1);
-						vec.push(p2);
-						vec.push(p1*p2);
-						vec.push(p2*p2);
-                        vec.sort();
-                        divisors.insert(iproduct as u32, vec);
-                    } else {
-                        factors3_vec[0].i = p1;
-                        factors3_vec[1].i = p2;
-                        factors3_vec[2].i = p3;
-                        divisors3_vec[0] = p1;
-                        divisors3_vec[1] = p2;
-                        divisors3_vec[2] = p3;
-                        divisors3_vec[3] = p1*p2;
-                        divisors3_vec[4] = p1*p3;
-                        divisors3_vec[5] = p2*p3;
-                        if self.bln_factors { factors.insert(iproduct as u32, factors3_vec.clone()); }
-                        if self.bln_factor_slices { factor_slices.insert(iproduct as u32, factorslices3_vec.clone()); }
-                        divisors3_vec.sort();
-                        divisors.insert(iproduct as u32, divisors3_vec.clone());
-                    }
-                }
-            }
-        }
-    }
-    if !self.bln_divisors {
-        divisors.resizeable = false;
-    }
-    *bln = true;
+    //self.init();
 }
 
 
-/*
-for tpl in [("ary", "[u32; ARYSIZE]", "u32"), ("arrayvec", "ArrayVec<[i32; ARYSIZE]>", "i32"), ("tinyvec", "TinyVec<[i32; ARYSIZE]>", "i32"), ("vec", "Vec<u32>", "u32")]:
-	print(f"""fn is_divisible_{tpl[0]}(factors: &{tpl[1]}, factors_len: usize, fact: {tpl[2]}) -> bool {{
-	if factors_len == 0 {
-		return false;
-	}
-	unsafe {{
-		for i in 0..factors_len {{
-			if *factors.get_unchecked(i) > fact {{
-				if *factors.get_unchecked(i) % fact == 0 {{
-					return true;
-				}}
-			}} else {{
-				if fact % *factors.get_unchecked(i) == 0 {{
-					return true;
-				}}
-			}}
-		}}
-		return false;
-	}}
-}}\n\n""")
-*/
-fn is_divisible_ary(factors: &[i32; ARYSIZE], factors_len: usize, fact: i32) -> bool {
-	if factors_len == 0 {
-		return false;
-	}
-	//assert_ne!(factors[factors_len - 1], 0);
-	//assert_eq!(factors[factors_len], 0);
-    unsafe {
-        for i in 0..factors_len {
-            if *factors.get_unchecked(i) > fact {
-                if *factors.get_unchecked(i) % fact == 0 {
-                    return true;
-                }
-            } else {
-                if fact % *factors.get_unchecked(i) == 0 {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-}
+generate_isdivisible_fn!(is_divisible_ary, [i32; ARYSIZE]);
+generate_isdivisible_fn!(is_divisible_vec, Vec<i32>);
+generate_isdivisible_fn!(is_divisible_tinyvec, TinyVec<[i32; ARYSIZE]>);
+generate_isdivisible_fn!(is_divisible_arrayvec, ArrayVec<[i32; ARYSIZE]>);
+generate_isdivisible_fn!(is_divisible_smallvec, SmallVec<[i32; ARYSIZE]>);
+
+//generate_backtrack_fn ($fn_name:ident, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident)
+//generate_backtrack_stack_fn ($fn_name:ident, $stack_type:ty, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident)
+generate_backtrack_stack_fn!(backtrack_stack_vec, StackVecType, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec);
+generate_backtrack_stack_fn!(backtrack_stack_tinyvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec);
+generate_backtrack_stack_fn!(backtrack_stack_arrayvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec);
+generate_backtrack_stack_fn!(backtrack_stack_smallvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec);
+generate_backtrack_recurse_fn!(backtrack_recurse_vec, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec);
+generate_backtrack_recurse_fn!(backtrack_recurse_tinyvec, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec);
+generate_backtrack_recurse_fn!(backtrack_recurse_arrayvec, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec);
+generate_backtrack_recurse_fn!(backtrack_recurse_smallvec, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec);
+
+generate_factor_combinations_fn!(factor_combinations_vec, FactorCombinationsVecType, TinyVec<[i32; ARYSIZE]>, combinations_vec, backtrack_stack_vec, backtrack_recurse_vec);
+generate_factor_combinations_fn!(factor_combinations_tinyvec, FactorCombinationsTinyType, TinyVec<[i32; ARYSIZE]>, combinations_tinyvec, backtrack_stack_tinyvec, backtrack_recurse_tinyvec);
+generate_factor_combinations_fn!(factor_combinations_arrayvec, FactorCombinationsArrayType, TinyVec<[i32; ARYSIZE]>, combinations_arrayvec, backtrack_stack_arrayvec, backtrack_recurse_arrayvec);
+generate_factor_combinations_fn!(factor_combinations_smallvec, FactorCombinationsSmallType, TinyVec<[i32; ARYSIZE]>, combinations_smallvec, backtrack_stack_smallvec, backtrack_recurse_smallvec);
 
 
-fn is_divisible_arrayvec(factors: &ArrayVec<[i32; ARYSIZE]>, factors_len: usize, fact: i32) -> bool {
-	if factors_len == 0 {
-		return false;
-	}
-    unsafe {
-        for i in 0..factors_len {
-            if *factors.get_unchecked(i) > fact {
-                if *factors.get_unchecked(i) % fact == 0 {
-                    return true;
-                }
-            } else {
-                if fact % *factors.get_unchecked(i) == 0 {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-}
-
-
-fn is_divisible_tinyvec(factors: &TinyVec<[i32; ARYSIZE]>, factors_len: usize, fact: i32) -> bool {
-	if factors_len == 0 {
-		return false;
-	}
-    unsafe {
-        for i in 0..factors_len {
-            if *factors.get_unchecked(i) > fact {
-                if *factors.get_unchecked(i) % fact == 0 {
-                    return true;
-                }
-            } else {
-                if fact % *factors.get_unchecked(i) == 0 {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-}
-
-
-fn is_divisible_vec(factors: &Vec<i32>, factors_len: usize, fact: i32) -> bool {
-	if factors_len == 0 {
-		return false;
-	}
-    unsafe {
-        for i in 0..factors_len {
-            if *factors.get_unchecked(i) > fact {
-                if *factors.get_unchecked(i) % fact == 0 {
-                    return true;
-                }
-            } else {
-                if fact % *factors.get_unchecked(i) == 0 {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-}
-
-pub fn backtrack_ary(&mut self, istart: i32, itarget: i32, factors: [i32; ARYSIZE], factors_len: usize)
-{
-    let t0 = Instant::now();
-    //println!("backtrack_ary(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors_len);
-    if itarget == 1 
-    {
-        if (factors_len >= self.min_factors_len && factors_len <= self.max_factors_len) 
-        {
-			let mut factors_sorted: [i32; ARYSIZE] = [0; ARYSIZE];
-			for i in 0..factors_len {
-				factors_sorted[i] = factors[i];
-			}
-			factors_sorted.sort_unstable();
-			let mut izero = 0;
-			let mut ifactors_len = factors_len;
-			while factors_sorted[izero] == 0 {
-				izero += 1;
-				ifactors_len += 1;
-			}
-			if false && let Some(ref mut f) = self.backtrack_ary_file {
-				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, &factors_sorted[izero..ifactors_len], factors_len);
-			}
-			//println!("factors_sorted = {:?}", factors_sorted);
-			//println!("factors_sorted[{}] = {}, factors_sorted[{}] = {}", izero, factors_sorted[izero], ifactors_len - 1, factors_sorted[ifactors_len - 1]);
-			if false {
-				if factors_sorted[izero + 0] != factors_sorted[izero + 1]
-				{
-					let mut bappend: bool = true;
-					let mut j: usize = ifactors_len;
-					while j > 1
-					{
-						j -= 1;
-						let mut k: usize = j;
-						while k > izero
-						{ 
-							k -= 1;
-							if factors_sorted[j] % factors_sorted[k] == 0
-							{
-								bappend = false;
-								break;
-							}
-						}
-						if !bappend
-						{
-							break;
-						}
-					}
-					if bappend
-					{
-						let mut iprod = 1;
-						for i in 0..factors_len {
-							iprod *= factors_sorted[izero + i];
-							factors_sorted[i] = factors_sorted[izero + i];
-							factors_sorted[izero + i] = 0;
-						}
-						if self.n == iprod && self.combinations_ary.iter().find(|&x| *x == factors_sorted).is_none() {
-							self.combinations_ary.push(factors_sorted);
-						}
-					}
-                }
-            } else {
-				//let mut iprod = 1;
-				for i in 0..factors_len {
-					//iprod *= factors_sorted[izero + i];
-					factors_sorted[i] = factors_sorted[izero + i];
-					factors_sorted[izero + i] = 0;
-				}
-				if self.combinations_ary.iter().find(|&x| *x == factors_sorted).is_none() {
-					self.combinations_ary.push(factors_sorted);
-				}
-			}
-        }
-        
-    } else {
-        
-		unsafe {
-			let mut factors_array: [i32; ARYSIZE] = [0; ARYSIZE];
-			for i in 0..factors_len {
-				factors_array[i] = factors[i];
-			}
-			if self.bitprimes.contains_unchecked(itarget as usize) {
-				//println!("{} is prime", itarget);			
-				if !Self::is_divisible_ary(&factors, factors_len, itarget) {
-					*factors_array.get_unchecked_mut(factors_len) = itarget;
-					self.backtrack_ary(itarget, 1, factors_array, factors_len + 1);
-					//*factors_array.get_unchecked_mut(factors_len) = 0;
-				}
-			} else {
-				//let bprint: bool = true;
-				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-				if self.exhaustive_search {
-					let mut i = istart;
-					while i * i <= itarget {
-						if itarget % i == 0 && !Self::is_divisible_ary(&factors, factors_len, i) {
-							*factors_array.get_unchecked_mut(factors_len) = i;
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-							self.backtrack_ary(i, itarget / i, factors_array, factors_len + 1);
-							//*factors_array.get_unchecked_mut(factors_len) = 0;
-						}
-						i += 1;
-					}
-				} else {
-					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-					let mut vecdivisors: TinyVec<[i32; DIVISORSIZE]> = divisors::get_divisors(itarget);
-					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-					//vecdivisors.sort_unstable();
-					//println!("vecdivisors({}) sort: {:?}", vecdivisors);
-					if false {
-						vecdivisors.push(itarget);
-					}
-					//let lastfactor = if factors_len > 0 { *factors.get_unchecked(factors_len - 1) } else { 0 };
-					for d in 0..vecdivisors.len() {
-						/*
-						if !self.bln_gt_half && *div == 2 {
-							break;
-						}
-						*/
-						let div = *vecdivisors.get_unchecked(d);
-						if (d == 0 || div != *vecdivisors.get_unchecked(d-1)) && (self.bln_gt_half || div != 2) && !Self::is_divisible_ary(&factors, factors_len, div) {
-							*factors_array.get_unchecked_mut(factors_len) = div;
-							self.backtrack_ary(div, itarget / div, factors_array, factors_len + 1);
-							//*factors_array.get_unchecked_mut(factors_len) = 0;
-						}
-					}
-					if true && !Self::is_divisible_ary(&factors, factors_len, itarget) {
-						*factors_array.get_unchecked_mut(factors_len) = itarget;
-						self.backtrack_ary(itarget, 1, factors_array, factors_len + 1);
-						//*factors_array.get_unchecked_mut(factors_len) = 0;
-					}
-				}
-			}
-        }
-    }
-    
-   return;
-}
- 
- 
-pub fn backtrack_arrayvec(&mut self, istart: i32, itarget: i32, mut factors: ArrayVec<[i32; ARYSIZE]>)
-{
-    let t0 = Instant::now();
-    //println!("backtrack_arrayvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
-	
-    if itarget == 1 
-    {
-        if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
-        {
-            factors.sort_unstable();
-			if false && let Some(ref mut f) = self.backtrack_arrayvec_file {
-				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
-			}
-			if false {
-				if factors[0] != factors[1]
-				{
-					let mut bappend: bool = true;
-					let mut j: usize = factors.len();
-					while j > 1
-					{
-						j -= 1;
-						let mut k: usize = j;
-						while k > 0
-						{ 
-							k -= 1;
-							if factors[j] % factors[k] == 0
-							{
-								bappend = false;
-								break;
-							}
-						}
-						if !bappend
-						{
-							break;
-						}
-					}
-					if bappend {
-						let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
-						if self.combinations_arrayvec.iter().find(|&x| *x == tiny_factors).is_none() {
-							self.combinations_arrayvec.push(tiny_factors);
-						}
-					}
-				}
-			} else {
-				let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
-				if self.combinations_arrayvec.iter().find(|&x| *x == tiny_factors).is_none() {
-					self.combinations_arrayvec.push(tiny_factors);
-				}
-			}
-        }
-        
-    } else {
-        
-		unsafe {
-			if self.bitprimes.contains_unchecked(itarget as usize) {
-				//println!("{} is prime", itarget);
-				if !Self::is_divisible_arrayvec(&factors, factors.len(), itarget) {
-					factors.push(itarget);
-					self.backtrack_arrayvec(itarget, 1, factors.clone());
-					factors.pop();
-				}
-			} else {
-				//let bprint: bool = true;
-				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-				if self.exhaustive_search {
-					let mut i = istart;
-					while i * i <= itarget {
-						if itarget % i == 0 && !Self::is_divisible_arrayvec(&factors, factors.len(), i) {
-							factors.push(i as i32);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-							self.backtrack_arrayvec(i, itarget / i, factors.clone());
-							factors.pop();
-						}
-						i += 1;
-					}
-				} else {
-					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-					let mut vecdivisors: TinyVec<[i32; DIVISORSIZE]> = divisors::get_divisors(itarget);
-					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-					//vecdivisors.sort_unstable();
-					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
-					if false {
-						vecdivisors.push(itarget);
-					}
-					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) } else { 0 };
-					for vd in 0..vecdivisors.len() {
-						let idiv = *vecdivisors.get_unchecked(vd);
-						/*
-						if !self.bln_gt_half && idiv == 2 {
-							break;
-						}
-						*/
-						if idiv != lastfactor && (self.bln_gt_half || idiv != 2) && !Self::is_divisible_arrayvec(&factors, factors.len(), idiv) {
-							factors.push(idiv);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
-							self.backtrack_arrayvec(idiv, itarget / idiv, factors.clone());
-							factors.pop();
-						}
-					}
-					if true && !Self::is_divisible_arrayvec(&factors, factors.len(), itarget) {
-						factors.push(itarget as i32);
-						self.backtrack_arrayvec(itarget, 1, factors.clone());
-						factors.pop();
-					}
-				}
-			}
-		}
-    }
-    
-   return;
-}
-
-
-pub fn backtrack_tinyvec(&mut self, istart: i32, itarget: i32, mut factors: TinyVec<[i32; ARYSIZE]>)
-{
-    let t0 = Instant::now();
-    //println!("backtrack_tinyvec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
-	
-    if itarget == 1 
-    {
-        if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
-        {
-            factors.sort_unstable();
-			if false && let Some(ref mut f) = self.backtrack_tinyvec_file {
-				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
-			}
-			if false {
-				if factors[0] != factors[1]
-				{
-					let mut bappend: bool = true;
-					let mut j: usize = factors.len();
-					while j > 1
-					{
-						j -= 1;
-						let mut k: usize = j;
-						while k > 0
-						{ 
-							k -= 1;
-							if factors[j] % factors[k] == 0
-							{
-								bappend = false;
-								break;
-							}
-						}
-						if !bappend
-						{
-							break;
-						}
-					}
-					if bappend
-					{
-						//let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
-						if self.combinations_tinyvec.iter().find(|&x| *x == factors).is_none() {
-							self.combinations_tinyvec.push(factors);
-						}
-					}
-				}
-			} else {
-				//let tiny_factors: TinyVec<[i32; ARYSIZE]> = factors.into();
-				if self.combinations_tinyvec.iter().find(|&x| *x == factors).is_none() {
-					self.combinations_tinyvec.push(factors);
-				}
-			}
-        }
-        
-    } else {
-        
-		unsafe {
-			if self.bitprimes.contains_unchecked(itarget as usize) {
-				//println!("{} is prime", itarget);
-				//if self.bln_gt_half || itarget != 2 {
-				if !Self::is_divisible_tinyvec(&factors, factors.len(), itarget) {
-					factors.push(itarget);
-					self.backtrack_tinyvec(itarget, 1, factors.clone());
-					factors.pop();
-				}
-			} else {
-				//let bprint: bool = true;
-				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-				if self.exhaustive_search {
-					let mut i = istart;
-					while i * i <= itarget {
-						if itarget % i == 0 && !Self::is_divisible_tinyvec(&factors, factors.len(), i) {
-							factors.push(i as i32);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-							self.backtrack_tinyvec(i, itarget / i, factors.clone());
-							factors.pop();
-						}
-						i += 1;
-					}
-				} else {
-					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-					let mut vecdivisors: TinyVec<[i32; DIVISORSIZE]> = divisors::get_divisors(itarget);
-					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-					//vecdivisors.sort_unstable();
-					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
-					if false {
-						vecdivisors.push(itarget);
-					}
-					//let lastdivisor = *vecdivisors.get_unchecked(vecdivisors.len() - 1);
-					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) } else { 0 };
-					for idx in 0..vecdivisors.len() {
-						let idiv = *vecdivisors.get_unchecked(idx) as i32;
-						/*
-						if !self.bln_gt_half && idiv == 2 {
-							break;
-						}
-						*/
-						if idiv != lastfactor && (self.bln_gt_half || idiv != 2) && !Self::is_divisible_tinyvec(&factors, factors.len(), idiv) {
-							factors.push(idiv);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
-							self.backtrack_tinyvec(idiv, itarget / idiv, factors.clone());
-							factors.pop();
-						}
-					}
-					if true && !Self::is_divisible_tinyvec(&factors, factors.len(), itarget) {
-						factors.push(itarget as i32);
-						self.backtrack_tinyvec(itarget, 1, factors.clone());
-						factors.pop();
-					}
-				}
-			}
-		}
-    }
-    
-   return;
-}
-
-pub fn backtrack_vec(&mut self, istart: i32, itarget: i32, mut factors: Vec<i32>)
-{
-    let t0 = Instant::now();
-    //println!("backtrack_vec(istart = {}, itarget = {}, factors = {:?}, factors_len = {})", istart, itarget, factors, factors.len());
-	
-    if itarget == 1 
-    {
-        if (factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len) 
-        {
-            factors.sort_unstable();
-			if false && let Some(ref mut f) = self.backtrack_vec_file {
-				writeln!(f, "istart = {}, itarget = {}, factors = {:?}, factors_len = {}", istart, itarget, factors, factors.len());
-			}
-			if false {
-				if (self.bln_gt_half || factors[0] != 2) && factors[0] != factors[1]
-				{
-					let mut bappend: bool = true;
-					let mut j: usize = factors.len();
-					while j > 1
-					{
-						j -= 1;
-						let mut k: usize = j;
-						while k > 0
-						{ 
-							k -= 1;
-							if factors[j] % factors[k] == 0
-							{
-								bappend = false;
-								break;
-							}
-						}
-						if !bappend
-						{
-							break;
-						}
-					}
-					if bappend 
-					{
-						let mut tiny_factors: TinyVec<[i32; ARYSIZE]> = TinyVec::new();
-						unsafe {
-							for f in 0..factors.len() {
-								tiny_factors.push(*factors.get_unchecked(f));
-							}
-						}
-						if self.combinations_vec.iter().find(|&x| *x == tiny_factors).is_none() {
-							self.combinations_vec.push(tiny_factors);
-						}
-					}
-				}
-			} else {
-				let mut tiny_factors: TinyVec<[i32; ARYSIZE]> = TinyVec::new();
-				unsafe {
-					for f in 0..factors.len() {
-						tiny_factors.push(*factors.get_unchecked(f));
-					}
-				}
-				if self.combinations_vec.iter().find(|&x| *x == tiny_factors).is_none() {
-					self.combinations_vec.push(tiny_factors);
-				}
-			}
-        }
-        
-    } else {
-        
-		unsafe {
-			if self.bitprimes.contains_unchecked(itarget as usize) {
-				//println!("{} is prime", itarget);
-				if !Self::is_divisible_vec(&factors, factors.len(), itarget) {
-					factors.push(itarget);
-					self.backtrack_vec(itarget, 1, factors.clone());
-					factors.pop();
-				}
-			} else {
-				//let bprint: bool = true;
-				//let bprint: bool = itarget == 24 * 4373 || itarget == 1049520;
-				if self.exhaustive_search {
-					let mut i = istart;
-					while i * i <= itarget {
-						if itarget % i == 0 && !Self::is_divisible_vec(&factors, factors.len(), i) {
-							factors.push(i);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, i = {}, factors = {:?}", n, istart, itarget, i, factors); }
-							self.backtrack_vec(i, itarget / i, factors.clone());
-							factors.pop();
-						}
-						i += 1;
-					}
-				} else {
-					//let mut vecdivisors: Vec<u32> = self.divisor_gen(itarget);
-					let mut vecdivisors: TinyVec<[i32; DIVISORSIZE]> = divisors::get_divisors(itarget);
-					//println!("vecdivisors({}) orig: {:?}", itarget, vecdivisors);
-					//vecdivisors.sort_unstable();
-					//println!("vecdivisors({}) sort: {:?}", itarget, vecdivisors);
-					if false {
-						vecdivisors.push(itarget);
-					}
-					//let lastdivisor = *vecdivisors.get_unchecked(vecdivisors.len() - 1);
-					let lastfactor = if factors.len() > 0 { *factors.get_unchecked(factors.len() - 1) as i32 } else { 0 };
-					for d in 0..vecdivisors.len() {
-						let div = *vecdivisors.get_unchecked(d);
-						if div != lastfactor && (self.bln_gt_half || div != 2) && !Self::is_divisible_vec(&factors, factors.len(), div) {
-							factors.push(div);
-							//if bprint { println!("n = {}, istart = {}, itarget = {}, div = {}, factors = {:?}", n, istart, itarget, div, factors); }
-							self.backtrack_vec(div, itarget / div, factors.clone());
-							factors.pop();
-						}
-					}
-					if true && !Self::is_divisible_vec(&factors, factors.len(), itarget) {
-						factors.push(itarget);
-						self.backtrack_vec(itarget, 1, factors.clone());
-						factors.pop();
-					}
-				}
-            }
-        }
-    }
-    
-   return;
-}
  
  /*
 n = 1049520, vecvec1 = [[5, 6, 8, 4373], [3, 8, 10, 4373], [12, 20, 4373], [5, 12, 17492], [15, 16, 4373], [5, 16, 13119], [3, 20, 17492], [5, 24, 8746], [3, 40, 8746], [5, 48, 4373], [3, 80, 4373]]
 n = 1049520, setvec2 = {[10, 24, 4373], [3, 40, 8746], [8, 15, 8746], [3, 20, 17492], [15, 16, 4373], [4, 6, 10, 4373], [5, 24, 8746], [3, 5, 69968], [8, 30, 4373], [10, 12, 8746], [5, 48, 4373], [3, 5, 16, 4373], [5, 6, 34984], [6, 20, 8746], [5, 12, 17492], [3, 8, 10, 4373], [8, 10, 13119], [6, 8, 21865], [3, 4, 10, 8746], [4, 6, 43730], [6, 10, 17492], [12, 20, 4373], [3, 16, 21865], [4, 5, 6, 8746], [5, 6, 8, 4373], [3, 10, 34984], [5, 8, 26238], [3, 5, 8, 8746], [6, 40, 4373], [3, 80, 4373], [3, 8, 43730], [4, 10, 26238], [5, 16, 13119], [4, 30, 8746]}, factors2 = [2, 2, 2, 2, 3, 5, 4373]
  */
 
+/*
 pub fn factor_combinations(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
 //pub fn factor_combinations(&mut self, i: u32) -> FactorCombinationsType
 //pub fn factor_combinations(&mut self, i: u32) -> impl Iterator<Item = TinyVec<[i32; ARYSIZE]>>
 {
-    /*
-    let mut tvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]> = TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new();
-    if self.datatype.is_set(DataType::VEC) {
-        tvec = self.factor_combinations_vec(i);
-    }
-    if self.datatype.is_set(DataType::TINYVEC) {
-        if tvec.len() == 0 {
-            tvec = self.factor_combinations_tinyvec(i);
-        } else {
-            tvec.extend(self.factor_combinations_tinyvec(i).iter().copied());
-        }
-    }
-    if self.datatype.is_set(DataType::ARRAYVEC) {
-        if tvec.len() == 0 {
-            tvec = self.factor_combinations_arrayvec(i);
-        } else {
-            tvec.extend(self.factor_combinations_arrayvec(i).iter().copied());
-        }
-    }
-    */
+    // let mut tvec: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]> = TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new();
+    // if self.datatype.is_set(DataType::VEC) {
+        // tvec = self.factor_combinations_vec(i);
+    // }
+    // if self.datatype.is_set(DataType::TINYVEC) {
+        // if tvec.len() == 0 {
+            // tvec = self.factor_combinations_tinyvec(i);
+        // } else {
+            // tvec.extend(self.factor_combinations_tinyvec(i).iter().copied());
+        // }
+    // }
+    // if self.datatype.is_set(DataType::ARRAYVEC) {
+        // if tvec.len() == 0 {
+            // tvec = self.factor_combinations_arrayvec(i);
+        // } else {
+            // tvec.extend(self.factor_combinations_arrayvec(i).iter().copied());
+        // }
+    // }
     match self.datatype {
-		/*
-        DataType::VEC => { 
-            let mut outer: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]> = TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new();
-            for inner in self.factor_combinations_vec(i) {
-                outer.push(inner);
-            }
-            outer
-        },
-		*/
+        // DataType::VEC => { 
+            // let mut outer: TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]> = TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new();
+            // for inner in self.factor_combinations_vec(i) {
+                // outer.push(inner);
+            // }
+            // outer
+        // },
         //DataType::VEC => { self.factor_combinations_vec(i) },
         DataType::TINYVEC => { self.factor_combinations_tinyvec(i) },
-        DataType::ARRAYVEC => { self.factor_combinations_arrayvec(i) },
+        DataType::ARRAYVEC => { TinyVec::Inline(self.factor_combinations_arrayvec(i)) },
         _ => { TinyVec::<[TinyVec<[i32; ARYSIZE]>; 1024]>::new() }
     }
 }
-
-#[instrument]
-//pub fn factor_combinations_ary(&mut self, i: u32) -> SequenceVec<[u32; ARYSIZE]>
-pub fn factor_combinations_ary(&mut self, i: i32) -> TinyVec<[[i32; ARYSIZE]; 1024]>
-{
-	/*
-	let mut ary: [u32; ARYSIZE] = [0; ARYSIZE];
-	ary[0] = 3;
-	ary[1] = 4;
-	ary[2] = 188;
-	println!("is_divisible_ary([3, 4, 188], 3, 208) = {}", Self::is_divisible_ary(&ary, 3, 208));
-	ary[0] = 3;
-	ary[1] = 4;
-	ary[2] = 28;
-	ary[3] = 32;
-	println!("is_divisible_ary([3, 4, 28, 32], 4, 52) = {}", Self::is_divisible_ary(&ary, 4, 52));
-	*/
-	self.n = i;
-    self.combinations_ary.clear();
-    let mut factors: [i32; ARYSIZE] = [0; ARYSIZE];
-    self.backtrack_ary(2, i, factors, 0);
-	if self.combinations_ary.len() > self.max_combinations[self.max_combinations.len() - 1] {
-		self.max_combinations.push(self.combinations_ary.len());
-	}
-    return self.combinations_ary.clone();
-}
-
-#[instrument]
-pub fn factor_combinations_tinyvec(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
-{
-	//println!("factor_combinations_tinyvec(i = {})", i);
-    self.combinations_tinyvec.clear();
-    let mut factors: TinyVec<[i32; ARYSIZE]> = TinyVec::new();
-    self.backtrack_tinyvec(2, i, factors.clone());
-	if self.combinations_tinyvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
-		self.max_combinations.push(self.combinations_tinyvec.len());
-	}
-    return self.combinations_tinyvec.clone();
-}
-
-#[instrument]
-//pub fn factor_combinations_arrayvec(&mut self, i: u32) -> SequenceVec<ArrayVec<[i32; ARYSIZE]>>
-pub fn factor_combinations_arrayvec(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
-{
-	//println!("factor_combinations_arrayvec(i = {})", i);
-    self.combinations_arrayvec.clear();
-    let mut factors: ArrayVec<[i32; ARYSIZE]> = ArrayVec::new();
-    self.backtrack_arrayvec(2, i, factors.clone());
-	if self.combinations_arrayvec.len() > self.max_combinations[self.max_combinations.len() - 1] {
-		self.max_combinations.push(self.combinations_arrayvec.len());
-	}
-    return self.combinations_arrayvec.clone();
-}
-
-#[instrument]
-pub fn factor_combinations_vec(&mut self, i: i32) -> Vec<TinyVec<[i32; ARYSIZE]>>
-//pub fn factor_combinations_vec(&mut self, i: u32) -> TinyVec<[TinyVec<[u32; ARYSIZE]>; 1024]>
-{
-    self.combinations_vec.clear();
-    let mut factors: Vec<i32> = Vec::<i32>::new();
-    self.backtrack_vec(2, i, factors.clone());
-	if self.combinations_vec.len() > self.max_combinations[self.max_combinations.len() - 1] {
-		self.max_combinations.push(self.combinations_vec.len());
-	}
-    return self.combinations_vec.clone();
-}
+*/
 
 
 pub fn print_capacity(&self) {
     // approx 6GB-7GB
     // LcmMapCapacity = 1,835,008 (2^20.8) - 3,670,016 (2^21.8)
     // FactorsCapacity = 1,872,354,336 (2^30.8) - 3,777,512,175 (2^31.8)
-    let i = LcmMapCapacity.load(Ordering::Relaxed);
+    //let i = LcmMapCapacity.load(Ordering::Relaxed);
     let j = Factors.lock().unwrap().max_capacity;
-    println!("capacity = {}, LcmMapCapacity = {} (2^{:.2}), Factors.max_capacity = {} (2^{:.2})", self.capacity.separate_with_commas(), i.separate_with_commas(), (i as f32).log2(), j.separate_with_commas(), (j as f32).log2());
-    println!("lcm_map.capacity() = {}", LcmMap.lock().unwrap().capacity().separate_with_commas());
+    println!("capacity = {}, Factors.max_capacity = {} (2^{:.2})", self.capacity.separate_with_commas(), j.separate_with_commas(), (j as f32).log2());
+    //println!("lcm_map.capacity() = {}", LcmMap.lock().unwrap().capacity().separate_with_commas());
     let keys_len = Factors.lock().unwrap().keys_len();
     let values_len = Factors.lock().unwrap().values_len();
     println!("factors.keys.len() = {}, factors.values.len() = {}", keys_len.separate_with_commas(), values_len.separate_with_commas());
@@ -1518,128 +832,21 @@ fn factor_gen(&mut self, mut n: u32) -> TinyVec<[Factor; FACTORSIZE]> {
         }
     }
     return rtn;
-    /*
-    let mut rtn: Vec<Factor> = Vec::new();
-    let un = n as u32;
-    let mut bbreak: bool = false;
-    //let mut ip = 0;
-    let isqrtn = n.isqrt();
-    for p in VecPrimes.lock().unwrap().iter() {
-        //ip += 1;
-        //println!("ip = {}, p = {}", ip, p);
-        let mut foundp: bool = false;
-        while n % *p == 0 {
-            foundp = true;
-            let len: usize = rtn.len();
-            if len == 0 || rtn[len - 1].i != *p {
-                rtn.push(Factor { i: *p, exp: 1 });
-            } else {
-                rtn[len - 1].exp += 1;
-            }
-            n /= p;
-            if n == 1 {
-                bbreak = true;
-                break
-            }
-        }
-        if bbreak || *p > isqrtn {
-            break;
-        }
-        if foundp {
-            if self.bln_factors {
-                let mut factors = if self.global { Factors.lock().unwrap() } else { self.factors.lock().unwrap() };
-                if factors.contains_key(n as u32) {
-                    for fact in factors.get(n as u32) {
-                        rtn.push(*fact);
-                    }
-                    n = 1;
-                    break;
-                }
-            }
-            if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
-                rtn.push(Factor { i: n, exp: 1 });
-                n = 1;
-                break;
-            }
-        }
-    }
-    if n != 1 {
-        rtn.push(Factor { i: n, exp: 1 });
-    }
-    let mut factors = if self.global { Factors.lock().unwrap() } else { self.factors.lock().unwrap() };
-    if self.bln_factors && factors.values_len() < factors.max_capacity {
-        factors.insert(un, rtn);
-        //println!("for n = {}, isqrtn = {}, ip = {}, rtn = {:?}", un, isqrtn, ip, rtn);
-        //println!("for n = {}, isqrtn = {}, ip = {}, Factors.get(un) = {:?}", un, ip, isqrtn, Factors.get(un));
-        let aryfactors: &[Factor] = factors.get(un);
-        return aryfactors.to_vec();
-    } else {
-        return rtn;
-    }
-    */
 }
 
 #[instrument]
 //pub fn divisor_gen(&mut self, n: u32, factors1: TinyVec<[Factor; ARYSIZE]>) -> TinyVec<[u32; ARYSIZE]> 
-pub fn divisor_gen(&mut self, n: i32) -> TinyVec<[i32; DIVISORSIZE]> {
-    if self.bitprimes[n as usize] {
-        return tiny_vec![];
+pub fn divisor_gen(&mut self, n: i32) -> SmallVec<[i32; DIVISORSIZE]> {
+    if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
+        return smallvec![];
     }
-	/*
-	let mut vec: TinyVec<[i32; DIVISORSIZE]> = TinyVec::new();
-    for d in divisors::get_divisors(n) {
-		vec.push(d);
-	}
-	return vec;
-	*/
+    if n % 2 == 0 && unsafe { self.bitprimes.contains_unchecked((n/2) as usize) } {
+        return smallvec![2, n/2];
+    }
+    if n % 3 == 0 && unsafe { self.bitprimes.contains_unchecked((n/3) as usize) } {
+        return smallvec![3, n/3];
+    }
 	return divisors::get_divisors(n);
-    /*
-    {
-        let mut divisors = if self.global { Divisors.lock().unwrap() } else { self.divisors.lock().unwrap() };
-        if divisors.contains_key(n as u32) {
-            let arydivisors = divisors.get(n as u32);
-            return arydivisors.to_vec();
-        }
-    }
-    let mut factors2: TinyVec<[Factor; ARYSIZE]> = factors1;
-    if factors2.len() == 0 {
-        factors2 = self.factor_gen(n);
-    }
-    let nfactors: usize = factors2.len();
-    let mut f: TinyVec<[u32; ARYSIZE]> = tiny_vec![0; nfactors];
-    let mut rtn: TinyVec<[u32; ARYSIZE]> = TinyVec::new();
-    loop {
-        let mut red: u32 = <u32>::pow(factors2[0].i, f[0].try_into().unwrap());
-        //assert!(nfactors <= factors.len());
-        for x in 1..nfactors {
-            if f[x] > 0 {
-                red *= <u32>::pow(factors2[x].i, f[x].try_into().unwrap());
-            }
-        }
-        if red != 1 && red != n {
-            rtn.push(red);
-        }
-        let mut i: usize = 0;
-        loop {
-            f[i] += 1;
-            if f[i] <= factors2[i].exp as u32 {
-                break;
-            }
-            f[i] = 0;
-            i += 1;
-            if i >= nfactors {
-                let mut divisors = if self.global { Divisors.lock().unwrap() } else { self.divisors.lock().unwrap() };
-                if self.bln_divisors && divisors.values_len() < divisors.max_capacity {
-                    divisors.insert(n as u32, rtn);
-                    let arydivisors = divisors.get(n as u32);
-                    return arydivisors.to_vec();
-                } else {
-                    return rtn;
-                }
-            }
-        }
-    }
-    */
 }
 
 fn lcm(&self, i: i32, j: i32) -> i32
@@ -1660,10 +867,12 @@ fn lcm(&self, i: i32, j: i32) -> i32
 #[instrument]
 fn mult_ary(&mut self, ary: &[i32]) -> i32
 {
+	/*
     if VecPrimes.lock().unwrap().len() <= 1
     {
         self.init();
     }
+	*/
     let ilen: usize = ary.len();
     let mut preva = if unsafe { self.bitprimes.contains_unchecked(ary[0] as usize) || self.bitprimes.contains_unchecked(ary[1] as usize) } { ary[0]*ary[1] } else { self.lcm(ary[0], ary[1]) };
     if ilen <= 2
@@ -1682,33 +891,6 @@ fn mult_ary(&mut self, ary: &[i32]) -> i32
         }
     }
     return preva;
-}
-
-#[instrument]
-fn mult_vec(&mut self, mut ary: Vec<i32>) -> i32
-{
-    if VecPrimes.lock().unwrap().len() <= 1
-    {
-        self.init();
-    }
-    let ilen: usize = ary.len();
-    ary[1] = if unsafe { self.bitprimes.contains_unchecked(ary[0] as usize) || self.bitprimes.contains_unchecked(ary[1] as usize) } { ary[0]*ary[1] } else { self.lcm(ary[0], ary[1]) };
-    if ilen <= 2
-    {
-        return ary[1];
-    }
-    else
-    {
-        for a in 2..(12 + 1)
-        {
-            ary[a] = if unsafe { self.bitprimes.contains_unchecked(ary[a] as usize) } { ary[a - 1]*ary[a] } else { self.lcm(ary[a - 1], ary[a]) };
-            if ilen <= a + 1
-            {
-                return ary[a];
-            }
-        }
-    }
-    return ary[ilen - 1];
 }
 
 pub fn calc_density(&mut self, n: usize, tvec: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
@@ -1737,7 +919,7 @@ pub fn calc_density_or(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Rati
 {
 	//let n: usize = a.iter().product::<i32>() as usize;
 	//let mut bits = FixedBitSet::with_capacity(n);
-	if n > self.bits0.len() {
+	while n > self.bits0.len() {
 		self.bits0.grow(self.bits0.len() + 524288);
 		self.bits1.grow(self.bits1.len() + 524288);
 	}

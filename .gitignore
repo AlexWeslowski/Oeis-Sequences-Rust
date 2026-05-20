@@ -1,4 +1,5 @@
 /.git/
 /docs/
+/output*
 /src.bak/
 /target/
