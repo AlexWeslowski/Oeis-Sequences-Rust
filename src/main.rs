@@ -202,29 +202,6 @@ pub fn print_duration(&mut self, seq: &Sequence24, mut n: u32, mut icount: u32, 
     if fmins <= 0.005 {
         return;
     }
-    // 
-    // linux debug factor_combinations()
-    //  (50,000)  2.03- 2.13 minutes ~ 23,437-24,590 per min
-    // (100,000)  6.08- 6.27 minutes ~ 15,957-16,438 per min
-    // (150,000) 12.45-12.82 minutes ~ 11,704-12,048 per min
-    // (200,000) 21.73-21.73 minutes ~  9,202- 9,202 per min
-    // (250,000) 32.47-33.12 minutes ~  7,549-7,700 per min
-    // (300,000) 45.48 minutes ~  6,596 per min
-    // (350,000) 57.43 minutes ~  6,094 per min
-    // (400,000) 70.95 minutes ~  5,638 per min
-    // 
-    // 
-    // windows release factor_combinations()
-	// (1,000,000)    1.55 mins ~ 645,161 per min
-	// (2,000,000)    4.50 mins ~ 444,444 per min
-	// (3,000,000)    8.60 mins ~ 348,837 per min
-    // (10,000,000)  54.00 mins ~ 185,189 per min
-    // (20,000,000) 130.65 mins ~ 153,084 per min
-    // (30,000,000) 227.60 mins ~ 131,813 per min
-    // 
-    // factor_combinations2()
-    // 
-    // 
 	let msg = if fhrs < 1.0 {
         format!("thread #{}, ({}) {:.2} mins ~ {} per min", self.ithread + 1, icount.separate_with_commas(), (100.0*fmins).round()/100.0, (fcount/fmins).round().separate_with_commas())
     } else {
@@ -290,13 +267,6 @@ for inumthreads in range(4, 4 + 1):
 #[function_name::named]
 pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence24) -> (Vec<usize>, Vec<usize>)
 {
-    /*
-    let mut seq: Sequence24 = Sequence24::new(2, nfinish as usize, false);
-    seq.bln_factors = true;
-    seq.bln_divisors = false;
-    seq.set_primes(&primes);
-    */
-
     let nstepby: u32 = if self.matches.len() == 1 { *self.matches[0].denom() as u32 } else { 1 };
     if nstart % nstepby > 0
     {
@@ -489,39 +459,6 @@ fn init(maxprime: u32) -> PrimesType
     }
     return primes;
 }
-
-
-/*
-
-12, 168, 240, 13,440, 14,880, 65,280, 549,120, 591,360, 591,360, 833,280, 954,240, 
-1,145,760, 1,317,120, 1,666,560, 1,908,480, 2,143,680, 2,204,160, 3,655,680, 3,886,080, 
-4,408,320, 6,990,720, 8,094,720, 17,149,440, 25,259,520, 39,443,712, 39,621,120
-
-1/2    3, 4    12
-1/2    3, 7, 8    168
-1/2    3, 5, 16    240
-1/2    3, 7, 10, 32    6,720
-1/2    3, 5, 28, 32    13,440
-1/2    3, 5, 31, 32    14,880
-1/2    3, 5, 17, 256    65,280
-1/2    3, 10, 11, 13, 128    549,120
-1/2    3, 7, 11, 32, 80    591,360
-1/2    3, 7, 11, 40, 64    591,360
-1/2    3, 7, 10, 62, 64    833,280
-1/2    3, 7, 10, 64, 71    954,240
-1/2    3, 7, 11, 32, 155    1,145,760
-1/2    3, 5, 32, 49, 56    1,317,120
-1/2    3, 5, 31, 56, 64    1,666,560
-1/2    3, 5, 28, 64, 71    1,908,480
-1/2    3, 7, 11, 29, 320    2,143,680
-1/2    3, 7, 10, 41, 256    2,204,160
-1/2    3, 7, 10, 34, 512    3,655,680
-1/2    3, 5, 23, 64, 176    3,886,080
-1/2    3, 5, 28, 41, 256    4,408,320
-1/2    3, 5, 22, 64, 331    6,990,720
-1/2    3, 5, 31, 34, 512    8,094,720
-
-*/
 
 
 #[derive(Parser, Debug)]
@@ -817,16 +754,10 @@ fn main()
     
 	let t1: Instant = Instant::now();
 	let pid = Pid::from_u32(process::id());
-    //let inumthreads: u8 = vecargs[1].parse::<u8>().ok().unwrap();
-    //let mut strratios1: String = vecargs[2].clone();
 	args.ratios = args.ratios.replace("[", "").replace("]", "").replace(" ", "");
-    //let istart: u32 = vecargs[3].parse::<u32>().ok().unwrap();
-    //let ifinish: u32 = vecargs[4].parse::<u32>().ok().unwrap();
 	
 	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
-    // let mut setprimes1: Arc<BTreeSet<i64>> = Arc::new(init(args.finish.ilog2() + 1));
     let mut vecprimes1: Arc<PrimesType> = Arc::new(init(args.finish as u32));
-    // new(i: u32, capacity: usize, global: bool, resize: bool)
 
 	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
@@ -866,20 +797,6 @@ fn main()
 		}
 	}
 	
-    /*
-    let mut seq = Sequence24::new(1049520, 1049520, true);
-    seq.set_primes(vecprimes1.clone());
-    let vecvec1 = seq.factor_combinations(1049520);
-    println!("vecvec1 = {:?}", vecvec1);
-    return;
-    */
-    //test_combinations(vecprimes1.clone(), true, true);
-    //test_combinations(vecprimes1.clone(), false, true);
-    //test_combinations(vecprimes1.clone(), true, false);
-    //test_divisors(vecprimes1.clone());
-    //return;
-    
-    
 	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     println!("{}() num_threads={}, vec_ratios=[{}], start={}, finish={}, method={}, stacksize={}", function_name!(), args.numthreads, args.ratios.replace(" ", ""), args.start.separate_with_commas(), args.finish.separate_with_commas(), args.method.to_string(), args.stacksize.separate_with_commas());
     println!("{}() vec={}, tinyvec={}, arrayvec={}, smallvec={}", function_name!(), args.datatype.is_set(DataType::VEC), args.datatype.is_set(DataType::TINYVEC), args.datatype.is_set(DataType::ARRAYVEC), args.datatype.is_set(DataType::SMALLVEC));

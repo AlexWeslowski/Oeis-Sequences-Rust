@@ -305,55 +305,6 @@ macro_rules! generate_backtrack_recurse_fn {
 				println!("{}() line {}, istart = {}, itarget = {}, factors = {:?}, factors.len() = {}", function_name!(), line!(), istart, itarget, factors, factors.len());
 			}
 			*/
-            //let _t0 = std::time::Instant::now();
-			// idepth += 1;
-			// let mut ilocks = 0;
-			// for i in 0..(idepth - 1) {
-				// match locks[i].try_lock() {
-					// Ok(guard) => {
-					// }
-					// Err(_) => {
-						// ilocks += 1;
-					// }
-				// }
-			// }
-			// let _guard = locks[idepth - 1].lock().unwrap();
-			// 1,145,760	[3, 7, 11, 32, 155]
-			// 1,317,120	[3, 5, 32, 49, 56]
-			// 
-			// 3 * 7 * 11 * 4960 = 1145760
-			// 3 * 7 * 11 * 1736 =  401016 
-			// 
-			// C++,  n = 1145760, target = 4960, idepth = 4, factors = [3, 7, 11]
-			// C++,  n = 1145760, target = 4960, idepth = 4, vec_divisors = [2, 4, 5, 8, 10, 16, 20, 31, 32, 40, 62, 80, 124, 155, 160, 248, 310, 496, 620, 992, 1240, 2480, 4960]
-			// C++,  n = 1145760, target = 310, factors = [3, 7, 11, 16]
-			// C++,  n = 1145760, target = 310, vec_divisors = [2, 5, 10, 31, 62, 155, 310]
-			// C++,  n = 1145760, target = 155, factors = [3, 7, 11, 32]
-			// C++,  n = 1145760, target = 155, vec_divisors = [5, 31, 155]
-			// C++,  n = 1145760, target = 1, factors = [3, 7, 11, 32, 155]
-			// Rust, n = 1145760, itarget = 1736, ilocks = 3, idepth = 4, factors = [3, 7, 11]
-			// Rust, n = 1145760, itarget = 1736, idepth = 4, factors = [3, 7, 11], vecdivisors = [2, 4, 7, 8, 14, 28, 31, 56, 62, 124, 217, 248, 434, 868, 1736]
-			// Rust, n = 1145760,  itarget = 93 (3*31), factors = [3, 7, 11, 32]
-			// target\debug\sequence_rust.exe 1 "[(1,2)]" 1145750 1145770 RATIO tinyvec --stacksize 33554432
-			// let (is_match, fact0, fact1, fact2) = match self.n {
-				// 833280		=> (true, 3, 7, 10),
-				// 954240 		=> (true, 3, 7, 10),
-				// 1145760     => (true, 3, 7, 11),
-				// 1317120     => (true, 3, 5, 32),
-				// 1666560     => (true, 3, 5, 31),
-				// 1908480     => (true, 3, 5, 28),
-				// _           => (false, 0, 0, 0),
-			// };
-			// if is_match {
-				// let s = format!("n = {}, istart = {}, itarget = {}, idepth = {}, factors = {:?}", self.n, istart, itarget, idepth, factors);
-				// if let Some(ref mut f) = self.$file_field {
-					// writeln!(f, "{}", s).ok();
-				// } else if factors.len() >= 4 && factors[0..3] == [fact0, fact1, fact2] && (itarget == 1 || itarget > 32) {
-					// println!("{}", s);
-				// } else if itarget >= 155 {
-					// println!("{}", s);
-				// }
-			// }
             if itarget == 1 {
                 if factors.len() >= self.min_factors_len && factors.len() <= self.max_factors_len {
 					let mut factors_clone = factors.clone();
@@ -396,16 +347,6 @@ macro_rules! generate_backtrack_recurse_fn {
 						//println!("{}() line {}, itarget = {}", function_name!(), line!(), itarget);
 						let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = if self.bln_divisor_gen { self.divisor_gen(itarget) } else { divisors::get_divisors(itarget) };
 						let lastfactor = if factors.len() > 0 { unsafe { *factors.get_unchecked(factors.len() - 1) } } else { 0 };
-						// if is_match {
-							// //format!("{}() line {}, itarget = {}, divisors = {:?}", function_name!(), line!(), itarget, vecdivisors);
-							// let s = format!("n = {}, istart = {}, itarget = {}, idepth = {}, factors = {:?}, divisors = {:?}", self.n, istart, itarget, idepth, factors, vecdivisors);
-							// //format!("idepth = {}, factors = {:?}, factors[{}] = {}", idepth, factors, factors.len() - 1, lastfactor);
-							// if let Some(ref mut f) = self.$file_field {
-								// writeln!(f, "{}", s).ok();
-							// } else if factors.len() >= 3 && factors[0..3] == [fact0, fact1, fact2] {
-								// println!("{}", s);
-							// }
-						// }
 						let i = if !self.bln_gt_half && vecdivisors[0] == 2 { 1 } else { 0 };
 						for idx in i..vecdivisors.len() {
 							let idiv = unsafe { *vecdivisors.get_unchecked(idx) as i32 };
@@ -481,8 +422,6 @@ pub struct Sequence24
 	backtrack_tinyvec_file: Option<std::fs::File>,
 	backtrack_arrayvec_file: Option<std::fs::File>,
 	backtrack_ary_file: Option<std::fs::File>,
-    //pub lcm_map: Mutex<HashMap<(i32, i32), i32, RandomState>>,
-    pub lcm_map: Arc<Mutex<HashMap<(i32, i32), i32, RandomState>>>,
 	pub bits0: FixedBitSet,
 	pub bits1: FixedBitSet,
     //setprimes: Arc<HashSet<i64, RandomState>>,
@@ -512,9 +451,6 @@ pub struct Sequence24
 lazy_static! {
     static ref BlnInit: Mutex<bool> = Mutex::new(false);
     static ref BlnPrimes: Mutex<bool> = Mutex::new(false);
-    
-    //static ref LcmMapCapacity: AtomicUsize = AtomicUsize::new(1048576); 
-    //static ref LcmMap: Mutex<HashMap<(i32, i32), i32, RandomState>> = Mutex::new(HashMap::with_hasher(RandomState::new()));
     
     //static ref FactorsCapacity: AtomicUsize = AtomicUsize::new(536870912); 
     static ref Factors: Mutex<MapFactors> = Mutex::new(MapFactors::new(1023, 1024, true));
@@ -552,7 +488,6 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
     //2752512/4408320 = 0.62
     let i1 = (0.24 * capacity as f32) as usize;
     let i2 = min(2_usize.pow(i1.ilog2() + 1), 2_usize.pow(26));
-    //LcmMapCapacity.store(i2, Ordering::Relaxed);
     // 536870912/4408320 = 122
     //1370015373/4408320 = 311
     //2808531504/4408320 = 637
@@ -594,9 +529,6 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
 		backtrack_tinyvec_file: if true { Some(OpenOptions::new().create(true).append(true).open("backtrack_tinyvec.txt").unwrap()) } else { None },
 		backtrack_arrayvec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_arrayvec.txt").unwrap()) } else { None },
 		backtrack_ary_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_ary.txt").unwrap()) } else { None },
-        //lcm_map: Mutex::new(HashMap::<(i64, i64), i64, RandomState>::new()),
-        //lcm_map: Mutex::new(HashMap::with_hasher(RandomState::new())),
-        lcm_map: Arc::new(Mutex::new(HashMap::with_hasher(RandomState::new()))),
 		bits0: FixedBitSet::with_capacity(max(524288, capacity/8)),
 		bits1: FixedBitSet::with_capacity(max(524288, capacity/8)),
         //setprimes: Arc::new(HashSet::<i64, RandomState>::new()), 
@@ -622,9 +554,6 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
 
 pub fn set_primes(&mut self, arc_primes: &Arc<PrimesType>) 
 {
-	//self.bitprimes = FixedBitSet::with_capacity(self.capacity + 1);
-    //self.bitprimes = FixedBitSet::with_capacity((primes[primes.len() - 1] + 1) as usize);
-    //for &p in primes.iter() {
 	for &p in arc_primes.iter() {
         self.bitprimes.insert(p as usize);
     }
@@ -672,11 +601,6 @@ generate_factor_combinations_fn!(factor_combinations_smallvec, FactorCombination
 
 
  
- /*
-n = 1049520, vecvec1 = [[5, 6, 8, 4373], [3, 8, 10, 4373], [12, 20, 4373], [5, 12, 17492], [15, 16, 4373], [5, 16, 13119], [3, 20, 17492], [5, 24, 8746], [3, 40, 8746], [5, 48, 4373], [3, 80, 4373]]
-n = 1049520, setvec2 = {[10, 24, 4373], [3, 40, 8746], [8, 15, 8746], [3, 20, 17492], [15, 16, 4373], [4, 6, 10, 4373], [5, 24, 8746], [3, 5, 69968], [8, 30, 4373], [10, 12, 8746], [5, 48, 4373], [3, 5, 16, 4373], [5, 6, 34984], [6, 20, 8746], [5, 12, 17492], [3, 8, 10, 4373], [8, 10, 13119], [6, 8, 21865], [3, 4, 10, 8746], [4, 6, 43730], [6, 10, 17492], [12, 20, 4373], [3, 16, 21865], [4, 5, 6, 8746], [5, 6, 8, 4373], [3, 10, 34984], [5, 8, 26238], [3, 5, 8, 8746], [6, 40, 4373], [3, 80, 4373], [3, 8, 43730], [4, 10, 26238], [5, 16, 13119], [4, 30, 8746]}, factors2 = [2, 2, 2, 2, 3, 5, 4373]
- */
-
 /*
 pub fn factor_combinations(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]>; 1024]>
 //pub fn factor_combinations(&mut self, i: u32) -> FactorCombinationsType
@@ -719,12 +643,9 @@ pub fn factor_combinations(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]
 
 pub fn print_capacity(&self) {
     // approx 6GB-7GB
-    // LcmMapCapacity = 1,835,008 (2^20.8) - 3,670,016 (2^21.8)
     // FactorsCapacity = 1,872,354,336 (2^30.8) - 3,777,512,175 (2^31.8)
-    //let i = LcmMapCapacity.load(Ordering::Relaxed);
     let j = Factors.lock().unwrap().max_capacity;
     println!("capacity = {}, Factors.max_capacity = {} (2^{:.2})", self.capacity.separate_with_commas(), j.separate_with_commas(), (j as f32).log2());
-    //println!("lcm_map.capacity() = {}", LcmMap.lock().unwrap().capacity().separate_with_commas());
     let keys_len = Factors.lock().unwrap().keys_len();
     let values_len = Factors.lock().unwrap().values_len();
     println!("factors.keys.len() = {}, factors.values.len() = {}", keys_len.separate_with_commas(), values_len.separate_with_commas());
@@ -852,16 +773,6 @@ pub fn divisor_gen(&mut self, n: i32) -> SmallVec<[i32; DIVISORSIZE]> {
 fn lcm(&self, i: i32, j: i32) -> i32
 {
     return num::integer::lcm(i, j);
-    /*
-    let mut map = if self.global { LcmMap.lock().unwrap() } else { self.lcm_map.lock().unwrap() };
-    if (map.contains_key(&(i, j))) {
-        return map[&(i, j)];
-    } else {
-        let k = num::integer::lcm(i, j);
-        if map.capacity() < LcmMapCapacity.load(Ordering::Relaxed) { map.insert((i, j), k); }
-        return k;
-    }
-    */
 }
 
 #[instrument]
@@ -895,17 +806,6 @@ fn mult_ary(&mut self, ary: &[i32]) -> i32
 
 pub fn calc_density(&mut self, n: usize, tvec: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
 {
-    /*
-    if self.calcdensity.is_set(CalcDensityType::RATIO) {
-        seq.calc_density_ratio(n as usize, &avec)
-    } else if self.calcdensity.is_set(CalcDensityType::OR) {
-        seq.calc_density_or(n as usize, &avec)
-    } else if self.calcdensity.is_set(CalcDensityType::XOR) {
-        seq.calc_density_xor(n as usize, &avec)
-    } else {
-        Ratio::<i32>::new(0, 1)
-    }
-    */
     match self.calcdensity {
         CalcDensityType::RATIO => { self.calc_density_ratio(n, &tvec) },
         CalcDensityType::OR => { self.calc_density_or(n, &tvec) },
@@ -915,10 +815,7 @@ pub fn calc_density(&mut self, n: usize, tvec: &TinyVec<[i32; ARYSIZE]>) -> Rati
 }
 
 pub fn calc_density_or(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
-//pub fn calc_density_or<T>(&mut self, n: usize, a: &T) -> Ratio<i32> where T: AsRef<[i32]>
 {
-	//let n: usize = a.iter().product::<i32>() as usize;
-	//let mut bits = FixedBitSet::with_capacity(n);
 	while n > self.bits0.len() {
 		self.bits0.grow(self.bits0.len() + 524288);
 		self.bits1.grow(self.bits1.len() + 524288);
@@ -941,9 +838,7 @@ pub fn calc_density_or(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Rati
 }
 
 pub fn calc_density_xor(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
-//pub fn calc_density_xor<T>(&mut self, n: usize, a: &T) -> Ratio<i32> where T: AsRef<[i32]>
 {
-	//let n: usize = a.iter().product::<i32>() as usize;
 	let mut bits = FixedBitSet::with_capacity(n);
 	for b in (0..n).step_by(a[0] as usize) {
 		bits.set(b, true);
@@ -960,7 +855,6 @@ pub fn calc_density_xor(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Rat
 
 #[instrument]
 pub fn calc_density_ratio(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
-//pub fn calc_density_ratio<T>(&mut self, n: usize, a: &T) -> Ratio<i32> where T: AsRef<[i32]>
 {
         let ilen: usize = a.len();
         let checkhalf = false;
