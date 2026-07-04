@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 #![allow(non_snake_case)] 
+#![allow(non_upper_case_globals)]
 
 //extern crate divisors;
 //extern crate flurry;
@@ -40,7 +41,7 @@ use std::result::Result;
 use std::slice::SliceIndex;
 use std::str::{self, FromStr};
 use std::sync::{Arc, Mutex, RwLock};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 use std::vec::Vec as SequenceVec;
 use thousands::Separable;
@@ -231,8 +232,15 @@ macro_rules! generate_isdivisible_fn {
 	}
 }
 
+#[derive(Clone, Copy)]
+enum DivisorsMode {
+    SelfDivisorGen,
+    DivisorsGetDivisors,
+	ObjDivisorsGetDivisors,
+}
+
 macro_rules! generate_backtrack_stack_fn {
-    ($fn_name:ident, $stack_type:ty, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident) => {
+    ($fn_name:ident, $stack_type:ty, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident, $divisors_mode:expr) => {
 		#[function_name::named]
 		pub fn $fn_name(&mut self, istart: i32, itarget: i32, factors: $factors_type) {
 			/*
@@ -272,7 +280,11 @@ macro_rules! generate_backtrack_stack_fn {
 								i += 1;
 							}
 						} else {
-							let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = if self.bln_divisor_gen { self.divisor_gen(current_target) } else { divisors::get_divisors(current_target) };
+							let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = match $divisors_mode {
+								DivisorsMode::SelfDivisorGen => self.divisor_gen(current_target),
+								DivisorsMode::DivisorsGetDivisors => divisors::get_divisors(current_target),
+								DivisorsMode::ObjDivisorsGetDivisors => self.obj_divisors.get_divisors(current_target),
+							};
 							let lastfactor = if current_factors.len() > 0 { unsafe { *current_factors.get_unchecked(current_factors.len() - 1) } } else { 0 };
 							let i = if !self.bln_gt_half && vecdivisors[0] == 2 { 1 } else { 0 };
 							for idx in i..vecdivisors.len() {
@@ -294,9 +306,8 @@ macro_rules! generate_backtrack_stack_fn {
     }
 }
 
-
 macro_rules! generate_backtrack_recurse_fn {
-    ($fn_name:ident, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident) => {
+    ($fn_name:ident, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident, $divisors_mode:expr) => {
 		#[function_name::named]
 		//pub fn $fn_name(&mut self, locks: &[Mutex<()>], mut idepth: usize, istart: i32, itarget: i32, factors: &mut $factors_type) {
         pub fn $fn_name(&mut self, istart: i32, itarget: i32, factors: &mut $factors_type) {
@@ -345,7 +356,11 @@ macro_rules! generate_backtrack_recurse_fn {
 						}
 					} else {
 						//println!("{}() line {}, itarget = {}", function_name!(), line!(), itarget);
-						let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = if self.bln_divisor_gen { self.divisor_gen(itarget) } else { divisors::get_divisors(itarget) };
+						let mut vecdivisors: SmallVec<[i32; DIVISORSIZE]> = match $divisors_mode {
+							DivisorsMode::SelfDivisorGen => self.divisor_gen(itarget),
+							DivisorsMode::DivisorsGetDivisors => divisors::get_divisors(itarget),
+							DivisorsMode::ObjDivisorsGetDivisors => self.obj_divisors.get_divisors(itarget),
+						};
 						let lastfactor = if factors.len() > 0 { unsafe { *factors.get_unchecked(factors.len() - 1) } } else { 0 };
 						let i = if !self.bln_gt_half && vecdivisors[0] == 2 { 1 } else { 0 };
 						for idx in i..vecdivisors.len() {
@@ -415,6 +430,7 @@ pub struct Sequence24
     combinations_arrayvec: ArrayVec<[TinyVec<[i32; ARYSIZE]>; 16384]>,
 	combinations_ary: TinyVec<[[i32; ARYSIZE]; 1024]>, 
 	combinations_vec: Vec<TinyVec<[i32; ARYSIZE]>>,
+	pub len_frequencies: [usize; 24],
 	pub max_combinations: Vec<usize>,
     pub max_stack: Vec<usize>,
 	backtrack_vec_file: Option<std::fs::File>,
@@ -431,9 +447,10 @@ pub struct Sequence24
     //pub factor_slices: MapU32,
     //pub divisors: Mutex<MapU32>,
     //vecprimes: Arc<Mutex<PrimesType>>,
-    pub factors: Arc<Mutex<MapFactors>>,
-    pub factor_slices: Arc<Mutex<MapFactorSlices>>,
-    pub divisors: Arc<Mutex<MapDivisors>>,
+	obj_divisors: divisors::Divisors<i32, {<i32 as Num>::PRIMESLEN + 1}>,
+    //pub factors: Arc<Mutex<MapFactors>>,
+    //pub factor_slices: Arc<Mutex<MapFactorSlices>>,
+    //pub divisors: Arc<Mutex<MapDivisors>>,
     
 	pub backtrack: Backtrack,
     pub bln_debug: bool,
@@ -448,9 +465,11 @@ pub struct Sequence24
     pub bln_factor_slices: bool,
 }
 
+static BlnPrimes: AtomicBool = AtomicBool::new(false);
+
+/*
 lazy_static! {
     static ref BlnInit: Mutex<bool> = Mutex::new(false);
-    static ref BlnPrimes: Mutex<bool> = Mutex::new(false);
     
     //static ref FactorsCapacity: AtomicUsize = AtomicUsize::new(536870912); 
     static ref Factors: Mutex<MapFactors> = Mutex::new(MapFactors::new(1023, 1024, true));
@@ -464,7 +483,7 @@ lazy_static! {
     
     pub static ref Perf: Mutex<AHashMap<&'static str, f64>> = Mutex::new(AHashMap::new());
 }
-
+*/
 
 
 /*
@@ -493,12 +512,14 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
     //2808531504/4408320 = 637
     let j1 = 122 * capacity;
     let j2 = min(2_usize.pow(j1.ilog2()), 2_usize.pow(34));
+	/*
     if global {
         //FactorsCapacity.store(j2, Ordering::Relaxed);
         //FactorSlicesCapacity.store(j2, Ordering::Relaxed);
         Factors.lock().unwrap().max_capacity = j2;
         FactorSlices.lock().unwrap().max_capacity = j2;
     }
+	*/
 	
 	let bln_divisors = false;
 	let bln_factors = false;
@@ -522,6 +543,7 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
 		combinations_arrayvec: ArrayVec::<[TinyVec<[i32; ARYSIZE]>; 16384]>::new(),
         combinations_smallvec: SmallVec::<[TinyVec<[i32; ARYSIZE]>; 256]>::new(),
 		combinations_ary: TinyVec::<[[i32; ARYSIZE]; 1024]>::new(), 
+		len_frequencies: [0; 24],
 		max_combinations: vec![0],
 		max_stack: vec![0],
 		backtrack_vec_file: if false { Some(OpenOptions::new().create(true).append(true).open("backtrack_vec.txt").unwrap()) } else { None },
@@ -534,9 +556,10 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
         //setprimes: Arc::new(HashSet::<i64, RandomState>::new()), 
         bitprimes: FixedBitSet::with_capacity(capacity + 1),
         //vecprimes: Arc::new(TinyVec::new()), 
-        factors: if bln_factors { Arc::new(Mutex::new(MapFactors::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactors::new(capacity/8, capacity/4, resize))) },
-        factor_slices: if bln_factor_slices { Arc::new(Mutex::new(MapFactorSlices::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactorSlices::new(capacity/8, capacity/4, resize))) },
-        divisors: Arc::new(Mutex::new(MapDivisors::new(k1, capacity, resize))),
+		obj_divisors: divisors::Divisors::<i32, {<i32 as Num>::PRIMESLEN + 1}>::new(),
+        //factors: if bln_factors { Arc::new(Mutex::new(MapFactors::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactors::new(capacity/8, capacity/4, resize))) },
+        //factor_slices: if bln_factor_slices { Arc::new(Mutex::new(MapFactorSlices::new(j2, 2*j2, resize))) } else { Arc::new(Mutex::new(MapFactorSlices::new(capacity/8, capacity/4, resize))) },
+        //divisors: Arc::new(Mutex::new(MapDivisors::new(k1, capacity, resize))),
         
 		backtrack: Backtrack::Recurse,
         bln_debug: false,
@@ -554,25 +577,23 @@ pub fn new(capacity: usize, global: bool, resize: bool, dt: DataType, cdt: CalcD
 
 pub fn set_primes(&mut self, arc_primes: &Arc<PrimesType>) 
 {
+    if BlnPrimes.load(Ordering::SeqCst) {
+        return;
+    }
 	for &p in arc_primes.iter() {
         self.bitprimes.insert(p as usize);
     }
-    
-    let mut bln = BlnPrimes.lock().unwrap();
-    if *bln {
-        return;
-    }
     //let vec_primes: Vec<u32> = Arc::try_unwrap(arc_primes).unwrap_or_else(|arc| (*arc).clone());
     //*VecPrimes.lock().unwrap() = primes;
-	let isqrt = arc_primes.len().isqrt();
-	*VecPrimes.lock().unwrap() = arc_primes[0..isqrt].to_vec();
+	//let isqrt = arc_primes.len().isqrt();
+	//*VecPrimes.lock().unwrap() = arc_primes[0..isqrt].to_vec();
 	/*
 	let mut vec = VecPrimes.lock().unwrap();
 	for p in &arc_primes[0..isqrt] {
 		vec.push(*p);
 	}
 	*/
-    *bln = true;
+    BlnPrimes.store(true, Ordering::SeqCst);
     //self.init();
 }
 
@@ -585,14 +606,14 @@ generate_isdivisible_fn!(is_divisible_smallvec, SmallVec<[i32; ARYSIZE]>);
 
 //generate_backtrack_fn ($fn_name:ident, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident)
 //generate_backtrack_stack_fn ($fn_name:ident, $stack_type:ty, $factors_type:ty, $file_field:ident, $is_divisible_fn:ident, $combinations_field:ident)
-generate_backtrack_stack_fn!(backtrack_stack_vec, StackVecType, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec);
-generate_backtrack_stack_fn!(backtrack_stack_tinyvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec);
-generate_backtrack_stack_fn!(backtrack_stack_arrayvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec);
-generate_backtrack_stack_fn!(backtrack_stack_smallvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec);
-generate_backtrack_recurse_fn!(backtrack_recurse_vec, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec);
-generate_backtrack_recurse_fn!(backtrack_recurse_tinyvec, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec);
-generate_backtrack_recurse_fn!(backtrack_recurse_arrayvec, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec);
-generate_backtrack_recurse_fn!(backtrack_recurse_smallvec, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec);
+generate_backtrack_stack_fn!(backtrack_stack_vec, StackVecType, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_stack_fn!(backtrack_stack_tinyvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_stack_fn!(backtrack_stack_arrayvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_stack_fn!(backtrack_stack_smallvec, StackType, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_recurse_fn!(backtrack_recurse_vec, TinyVec<[i32; ARYSIZE]>, backtrack_vec_file, is_divisible_tinyvec, combinations_vec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_recurse_fn!(backtrack_recurse_tinyvec, TinyVec<[i32; ARYSIZE]>, backtrack_tinyvec_file, is_divisible_tinyvec, combinations_tinyvec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_recurse_fn!(backtrack_recurse_arrayvec, TinyVec<[i32; ARYSIZE]>, backtrack_arrayvec_file, is_divisible_tinyvec, combinations_arrayvec, DivisorsMode::ObjDivisorsGetDivisors);
+generate_backtrack_recurse_fn!(backtrack_recurse_smallvec, TinyVec<[i32; ARYSIZE]>, backtrack_smallvec_file, is_divisible_tinyvec, combinations_smallvec, DivisorsMode::ObjDivisorsGetDivisors);
 
 generate_factor_combinations_fn!(factor_combinations_vec, FactorCombinationsVecType, TinyVec<[i32; ARYSIZE]>, combinations_vec, backtrack_stack_vec, backtrack_recurse_vec);
 generate_factor_combinations_fn!(factor_combinations_tinyvec, FactorCombinationsTinyType, TinyVec<[i32; ARYSIZE]>, combinations_tinyvec, backtrack_stack_tinyvec, backtrack_recurse_tinyvec);
@@ -641,6 +662,7 @@ pub fn factor_combinations(&mut self, i: i32) -> TinyVec<[TinyVec<[i32; ARYSIZE]
 */
 
 
+/*
 pub fn print_capacity(&self) {
     // approx 6GB-7GB
     // FactorsCapacity = 1,872,354,336 (2^30.8) - 3,777,512,175 (2^31.8)
@@ -656,7 +678,9 @@ pub fn print_capacity(&self) {
     let values_len = Divisors.lock().unwrap().values_len();
     println!("divisors.keys.len() = {}, divisors.values.len() = {}", keys_len.separate_with_commas(), values_len.separate_with_commas());
 }
+*/
 
+/*
 #[instrument]
 pub fn factor_slice(&mut self, mut n: u32) -> TinyVec<[u32; FACTORSIZE]> {
     if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
@@ -723,7 +747,9 @@ pub fn factor_slice(&mut self, mut n: u32) -> TinyVec<[u32; FACTORSIZE]> {
         return rtn;
     }
 }
+*/
 
+/*
 #[instrument]
 fn factor_gen(&mut self, mut n: u32) -> TinyVec<[Factor; FACTORSIZE]> {
     if unsafe { self.bitprimes.contains_unchecked(n as usize) } {
@@ -754,6 +780,7 @@ fn factor_gen(&mut self, mut n: u32) -> TinyVec<[Factor; FACTORSIZE]> {
     }
     return rtn;
 }
+*/
 
 #[instrument]
 //pub fn divisor_gen(&mut self, n: u32, factors1: TinyVec<[Factor; ARYSIZE]>) -> TinyVec<[u32; ARYSIZE]> 
@@ -808,6 +835,7 @@ pub fn calc_density(&mut self, n: usize, tvec: &TinyVec<[i32; ARYSIZE]>) -> Rati
 {
     match self.calcdensity {
         CalcDensityType::RATIO => { self.calc_density_ratio(n, &tvec) },
+		CalcDensityType::RATIOBITMASK => { self.calc_density_bitmask(n, &tvec) },
         CalcDensityType::OR => { self.calc_density_or(n, &tvec) },
         CalcDensityType::XOR => { self.calc_density_xor(n, &tvec) },
         _ => { Ratio::<i32>::new(0, 1) }
@@ -854,9 +882,53 @@ pub fn calc_density_xor(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Rat
 }
 
 #[instrument]
+pub fn calc_density_bitmask(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32> 
+{
+	let checkhalf = false;
+	let mut frac = Ratio::new(1, a[0]);
+
+    for mask in 2i32..(1i32 << a.len()) {
+        let mut denom = 1i32;
+        for i in 0..a.len() {
+            if (mask & (1i32 << i)) != 0 {
+                if denom == 1 {
+                    denom = a[i];
+                } else {
+					denom = if unsafe { self.bitprimes.contains_unchecked(a[i] as usize) } { denom * a[i] } else { self.lcm(denom, a[i]) };
+                }
+            }
+        }
+        let term = Ratio::new(1, denom);
+        if mask.count_ones() % 2 == 1 {
+            frac += term;
+        } else {
+            frac -= term;
+        }
+    }
+    frac
+}
+
+#[instrument]
 pub fn calc_density_ratio(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> Ratio<i32>
 {
+		/*
+		// 4194304
+		frequency_count[4] = 14545260
+		frequency_count[5] = 2051686
+		frequency_count[6] = 78152
+		frequency_count[7] = 452
+		// 8388608
+		frequency_count[4] = 36368326
+		frequency_count[5] = 5850411
+		frequency_count[6] = 271810
+		frequency_count[7] = 2360
+		*/
         let ilen: usize = a.len();
+		self.len_frequencies[ilen] += 1;
+		if ilen > 10 {
+			return self.calc_density_bitmask(n, &a);
+		}
+		
         let checkhalf = false;
         let mut sum = Ratio::<i32>::new(1, a[0]);
         
@@ -930,6 +1002,7 @@ pub fn calc_density_ratio(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> R
                 return self.one;
             }
         }
+		/*
         if ilen >= 11 {
             sum += Ratio::<i32>::new(1, a[10]) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[7], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[7], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[5], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[5], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[5], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[5], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[5], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[5], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[5], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[5], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[5], a[6], a[10]]));
             sum += Ratio::<i32>::new(-1, self.mult_ary(&[a[2], a[5], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[5], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[5], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[5], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[5], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[5], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[5], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[5], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[5], a[6], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[5], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[5], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[5], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[4], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[6], a[7], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[6], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[6], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[5], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[7], a[8], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[7], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[6], a[8], a[9], a[10]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[7], a[8], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[6], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[6], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[6], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[7], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[7], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[8], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[6], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[6], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[6], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[7], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[7], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[8], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[6], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[6], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[6], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[7], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[7], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[8], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[6], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[6], a[7], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[6], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[6], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[7], a[8], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[7], a[9], a[10]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[8], a[9], a[10]]));
@@ -968,6 +1041,7 @@ pub fn calc_density_ratio(&mut self, n: usize, a: &TinyVec<[i32; ARYSIZE]>) -> R
             sum += Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[8], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[6], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[7], a[8], a[10], a[11]]));
             sum += Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[5], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[4], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[3], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[2], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[1], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[2], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) + Ratio::<i32>::new(1, self.mult_ary(&[a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[5], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[6], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[6], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[6], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[6], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[4], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[5], a[6], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[5], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[3], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[2], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[1], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[6], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[5], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[4], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[2], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]])) - Ratio::<i32>::new(1, self.mult_ary(&[a[0], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]]));
         }
+		*/
         return sum;
 }
 

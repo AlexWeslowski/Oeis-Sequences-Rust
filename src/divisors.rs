@@ -215,6 +215,166 @@ get_divisors(108126720)
 
 */
 
+pub struct Divisors<T, const N: usize> where T: Num + Copy + Default,
+		  T::BackingArray: smallvec::Array<Item = T>,
+		  <T::BackingArray as smallvec::Array>::Item: Ord, {
+	ZERO: T, 
+	ONE: T, 
+	TWO: T, 
+	THREE: T, 
+	ARYSIZE: usize,
+	PRIMESLEN: usize,
+    primes: [T; N]
+}
+
+impl<T, const N: usize> Divisors<T, N> where T: Num + Copy + Default,
+		  T::BackingArray: smallvec::Array<Item = T>,
+		  <T::BackingArray as smallvec::Array>::Item: Ord, {
+    
+	pub fn new() -> Self {
+        let mut ary = [T::ZERO; N];
+        for i in 0..N {
+            ary[i] = T::PRIMES[i];
+        }
+        Divisors {
+			ZERO: T::ZERO, 
+			ONE: T::ONE, 
+			TWO: T::TWO, 
+			THREE: T::THREE, 
+			ARYSIZE: T::ARYSIZE,
+			PRIMESLEN: T::PRIMESLEN,
+            primes: ary,
+        }
+    }
+	
+	#[instrument]
+	pub fn get_divisors(&self, n: T) -> SmallVec<T::BackingArray> {
+		
+		let mut _n = n;
+		let mut v: SmallVec<T::BackingArray> = SmallVec::new();
+		
+		if false {
+			let mut pow2: usize = 0;
+			while _n & self.ONE == self.ZERO {
+				v.push(self.TWO << pow2);
+				pow2 += 1;
+				_n = _n >> 1;
+			}
+			
+			let mut _x: T = self.THREE;
+			let mut _n_sqrt: T = self.approximated_sqrt(_n);
+		
+			while _x < _n_sqrt {        
+				let mut _pow_x = _x;
+				let v_len = v.len();
+				let mut x_is_a_divisor = false;
+
+				let mut pow_x_is_a_divisor = _n % _x == self.ZERO;
+				while pow_x_is_a_divisor {
+					_n = _n.div(_x);
+					v.push(_pow_x);
+					self.push_new_divisors(&mut v, v_len, _pow_x);
+					pow_x_is_a_divisor = _n % _x == self.ZERO;
+					if pow_x_is_a_divisor {
+						_pow_x = _pow_x.mul(_x);                
+					}
+					x_is_a_divisor = true;
+				}
+				_x += self.TWO;
+				if x_is_a_divisor {
+					_n_sqrt = self.approximated_sqrt(_n);
+				}
+			}
+			
+			if _n > self.ONE && _n != n {
+				let v_len = v.len();
+				v.push(_n);
+				self.push_new_divisors(&mut v, v_len, _n);
+			}
+		}
+		
+		if true {
+			v.push(self.ONE);
+			
+			let mut p2 = self.TWO;
+			while _n & self.ONE == self.ZERO {
+				v.push(p2);
+				_n = _n >> 1;
+				p2 = p2 << 1;
+			}
+			
+			let mut i: usize = 1;
+			let mut _x: T = self.THREE;
+			let mut _n_sqrt: T = self.approximated_sqrt(_n);
+			
+			while _x <= _n_sqrt {
+				if _n % _x == self.ZERO {
+					let v_len = v.len();
+					if v_len >= self.ARYSIZE >> 1 {
+						v.reserve(v_len);
+					}
+					let mut p_x = _x;
+					while _n % _x == self.ZERO {
+						_n /= _x;
+						for i in 0..v_len {
+							v.push(p_x * unsafe { *v.get_unchecked(i) });
+						}
+						p_x *= _x;
+					}
+					_n_sqrt = self.approximated_sqrt(_n);
+				}
+				if i < self.PRIMESLEN {
+					i += 1;
+					//_x = self.primes[i];
+					_x = unsafe { *self.primes.get_unchecked(i) };
+				} else {
+					_x += self.TWO;
+				}
+			}
+			
+			if _n > self.ONE {
+				let v_len = v.len();
+				if v_len >= self.ARYSIZE >> 1 {
+					v.reserve(v_len);
+				}
+				for i in 0..v_len {
+					v.push(_n * unsafe { *v.get_unchecked(i) });
+				}
+			}
+			
+			v.remove(0);
+		}
+		
+		if v.len() > 1 {
+			v.sort();
+			//v.pop();
+			if (bln_perf.load(Ordering::Relaxed) || bln_debug.load(Ordering::Relaxed)) && v.len() > 2 {
+				let mut vec = vec_divisors.lock().unwrap();
+				vec.push(v.len() as u16);
+			}
+		}
+		
+		v
+	}
+	
+	#[inline]
+	pub fn approximated_sqrt(&self, n: T) -> T {
+		self.ONE << ((((std::mem::size_of::<T>() << 3) as u32 - n.leading_zeros()) >> 1) as usize + 1)
+	}
+	
+	#[inline]
+	fn push_new_divisors(&self, v: &mut SmallVec<T::BackingArray>, v_len: usize, _x: T) {
+		if v_len + v_len > v.capacity() {
+			v.reserve(v_len + 2);
+		}
+		for i in 0..v_len {
+			v.push(_x.mul(unsafe { *v.get_unchecked(i) }));
+		}
+	}
+
+}
+
+
 #[instrument]
 pub fn get_divisors<T>(n: T) -> SmallVec<T::BackingArray> 
 where T: Num + Default,
@@ -302,7 +462,8 @@ where T: Num + Default,
 			}
 			if i < T::PRIMESLEN {
 				i += 1;
-				_x = T::PRIMES[i];
+				//_x = T::PRIMES[i];
+				_x = unsafe { *T::PRIMES.get_unchecked(i) };
 			} else {
 				_x += T::TWO;
 			}

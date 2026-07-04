@@ -2,7 +2,7 @@
 #![allow(unused)]
 #![allow(non_snake_case)] 
 
-//extern crate crossbeam;
+extern crate crossbeam;
 //extern crate divisors;
 //extern crate flurry;
 extern crate itertools;
@@ -17,6 +17,7 @@ mod enums;
 mod divisors;
 mod sequence24;
 mod sequence2;
+mod stack;
 #[cfg(test)]
 mod tests;
 
@@ -40,6 +41,7 @@ use sequence24::{PRIMES_SIZE, PrimesType, Sequence24};
 use serde_json;
 //use shared_memory::*;
 use smallvec::{smallvec, SmallVec};
+//use stacker;
 use sysinfo::{Pid, System};
 use thousands::Separable;
 use time_graph;
@@ -67,13 +69,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicI32, AtomicI64, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::{Sender};
-
-
-/*
-lazy_static! {
-    static ref Seq: Sequence24 = Sequence24::new(2, 11457600, false);
-}
-*/
 
 
 struct LockedBool {
@@ -106,7 +101,7 @@ impl LockedBool {
 }
 
 struct Message {
-    threadid: u32,
+    thread_id: u32,
     datatype: DataType,
     calcdensity: CalcDensityType,
 	n: u32,
@@ -139,7 +134,7 @@ impl RatioVec {
 struct Main {
 	debug: bool,
     logging: bool,
-    ithread: u32,
+    thread_id: u32,
     anumthreads: AtomicU32,
     t1: Instant,
     astart: AtomicU32,
@@ -148,7 +143,8 @@ struct Main {
 	calcdensity: CalcDensityType,
     matches: Vec<Ratio<i32>>,
     predefined: HashMap<u32, Vec<RatioVec>, RandomState>,
-	outmap: Arc<Mutex<AHashMap<Ratio<i32>, ArrayVec<[u32; 4096]>>>>,
+	outmap: Arc<Mutex<AHashMap<Ratio<i32>, TinyVec<[u32; 8192]>>>>,
+	rx: crossbeam::channel::Receiver<Option<(u32, u32)>>,
 	tx: Option<Sender<Option<Message>>>,
 }
 
@@ -203,15 +199,15 @@ pub fn print_duration(&mut self, seq: &Sequence24, mut n: u32, mut icount: u32, 
         return;
     }
 	let msg = if fhrs < 1.0 {
-        format!("thread #{}, ({}) {:.2} mins ~ {} per min", self.ithread + 1, icount.separate_with_commas(), (100.0*fmins).round()/100.0, (fcount/fmins).round().separate_with_commas())
+        format!("thread #{}, ({}) {:.2} mins ~ {} per min", self.thread_id + 1, icount.separate_with_commas(), (100.0*fmins).round()/100.0, (fcount/fmins).round().separate_with_commas())
     } else {
-        format!("thread #{}, ({}) {:.2} hrs ~ {} per min", self.ithread + 1, icount.separate_with_commas(), (100.0*fhrs).round()/100.0, (fcount/fmins).round().separate_with_commas())
+        format!("thread #{}, ({}) {:.2} hrs ~ {} per min", self.thread_id + 1, icount.separate_with_commas(), (100.0*fhrs).round()/100.0, (fcount/fmins).round().separate_with_commas())
     };
     if self.logging && self.anumthreads.load(Ordering::Relaxed) == 1 {
         println!("{}", msg);
     }
 	if let Some(tx) = &self.tx {
-		tx.send(Some(Message { threadid: self.ithread + 1, datatype: self.datatype, calcdensity: self.calcdensity, n: n, ratio: Ratio::<i32>::new(0, 1), msg: msg }));
+		tx.send(Some(Message { thread_id: self.thread_id + 1, datatype: self.datatype, calcdensity: self.calcdensity, n: n, ratio: Ratio::<i32>::new(0, 1), msg: msg }));
 	}
     //seq.print_capacity();
     //println!("lcm_map.capacity() = {}", seq.lcm_map.lock().unwrap().capacity().separate_with_commas());
@@ -227,35 +223,44 @@ fn output(&mut self, n: &u32, this_combination: &TinyVec<[i32; 24]>, density: &R
 		let vec: String = Itertools::join(&mut this_combination.iter(), ", ");
 		let num: String = (*n).separate_with_commas();
 		let msg: String = format!(message_format!(), ratio, num, vec, this_combination.len());
-		self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(*n);
 		if self.anumthreads.load(Ordering::Relaxed) == 1 {
 			println!("{}", msg);
 		}
+		self.outmap.lock().unwrap().get_mut(ratio).unwrap().push(*n);
 		if let Some(tx) = &self.tx {
-			tx.send(Some(Message { threadid: self.ithread + 1, datatype: *datatype, calcdensity: self.calcdensity, n: *n, ratio: *ratio, msg: msg }));
+			tx.send(Some(Message { thread_id: self.thread_id + 1, datatype: *datatype, calcdensity: self.calcdensity, n: *n, ratio: *ratio, msg: msg }));
 		}
 	}
+}
+
+#[cfg(target_arch = "x86_64")]
+fn active_core_id() -> u32 {
+    let mut aux: u32 = 0;
+    unsafe {
+        core::arch::x86_64::__rdtscp(&mut aux);
+    }
+    aux & 0xFFF
 }
 
 /*
 nstart, nfinish, nstepby, ithousands = 2, 4000000, 2, 1000000
 #[int(((n - nstart) / nstepby) % 4) for n in range(nstart, nstart + 24, nstepby)]
 for inumthreads in range(4, 4 + 1):
-	minhsh = {ithread:[] for ithread in range(0, inumthreads)}
+	minhsh = {thread_id:[] for thread_id in range(0, inumthreads)}
 	nums = []
-	for ithread in range(0, inumthreads):
+	for thread_id in range(0, inumthreads):
 		n = nstart - nstepby
 		while n < nfinish:
 			n += nstepby
-			if ((n - nstart) / nstepby) % inumthreads != ithread:
+			if ((n - nstart) / nstepby) % inumthreads != thread_id:
 				continue
 			nums.append(n)
-			if (n - nstart - nstepby * ithread) % ithousands < inumthreads:
-				minhsh[ithread].append(n - nstart)
-			if (n - nstart - nstepby * ithread) % ithousands < inumthreads:
-				print(f"ithread = {ithread}, n % inumthreads = {n % inumthreads}, n - nstart - nstepby * ithread = {n - nstart - nstepby * ithread}, {n - nstart - nstepby * ithread} % ithousands = {(n - nstart - nstepby * ithread) % ithousands}")
-            if (n - nstart - nstepby * ithread) % ithousands == 0:
-				print(f"ithread = {ithread}, n % inumthreads = {n % inumthreads}, n - nstart - ithread = {n - nstart - ithread}, {n - nstart - ithread} % ithousands = {(n - nstart - ithread) % ithousands}")
+			if (n - nstart - nstepby * thread_id) % ithousands < inumthreads:
+				minhsh[thread_id].append(n - nstart)
+			if (n - nstart - nstepby * thread_id) % ithousands < inumthreads:
+				print(f"thread_id = {thread_id}, n % inumthreads = {n % inumthreads}, n - nstart - nstepby * thread_id = {n - nstart - nstepby * thread_id}, {n - nstart - nstepby * thread_id} % ithousands = {(n - nstart - nstepby * thread_id) % ithousands}")
+            if (n - nstart - nstepby * thread_id) % ithousands == 0:
+				print(f"thread_id = {thread_id}, n % inumthreads = {n % inumthreads}, n - nstart - thread_id = {n - nstart - thread_id}, {n - nstart - thread_id} % ithousands = {(n - nstart - thread_id) % ithousands}")
 	#print(f"inumthreads = {inumthreads}, nums = {sorted(nums)}")
 	print(f"inumthreads = {inumthreads}, minhsh = {minhsh}")
     print(f"len(nums) = {len(nums)}, nfinish - nstart + 1 = {nfinish - nstart + 1}")    
@@ -265,7 +270,7 @@ for inumthreads in range(4, 4 + 1):
 */
 #[instrument]
 #[function_name::named]
-pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence24) -> (Vec<usize>, Vec<usize>)
+pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut seq: Sequence24) -> (Vec<usize>, Vec<usize>, [usize; 24])
 {
     let nstepby: u32 = if self.matches.len() == 1 { *self.matches[0].denom() as u32 } else { 1 };
     if nstart % nstepby > 0
@@ -296,22 +301,30 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
         seq.datatype = vec_types[0];
     }
     
-	println!("do_work() n = {}, nfinish = {}, nstepby = {}, n % nstepby = {}, ithread = {}", n, nfinish, nstepby, n % nstepby, self.ithread);
+	let t1: Instant = Instant::now();
+	println!("do_work() n = {}, nfinish = {}, nstepby = {}, n % nstepby = {}, thread_id = {} / {}", n, nfinish, nstepby, n % nstepby, self.thread_id, inumthreads);
 	
+	//while let Ok(Some((mut n, nfinish))) = self.rx.recv()
+	while let Ok(opt) = self.rx.recv()
+	{
+	if opt.is_none() {
+		break;
+	}
+	let (mut n, nfinish) = opt.unwrap();
+	//println!("do_work() n = {}, nfinish = {}, thread_id = {} / {}", n, nfinish, self.thread_id, inumthreads);
 	while n < nfinish
     {
 		n += nstepby;
-        if ((n - nstart) / nstepby) % inumthreads != self.ithread
+		/*
+        if ((n - nstart) / nstepby) % inumthreads != self.thread_id
         {
             continue;
         }
+		*/
 		if self.debug {
 			nvec.push(n);
 		}
         match n {
-            // 1/2    3, 4         12
-            // 1/2    3, 7, 8     168
-            // 1/2    3, 5, 16    240
             2 | 12 | 168 | 240 |
             3 | 24 | 30 | 36 | 378 | 480 | 504 | 540 | 600 | 660 | 720 | 840 | 936 | 1260 | 1320 | 1404 | 1980 |
             4 | 48 | 56 | 80 | 864 | 1344 | 1512 | 1680 | 1824 | 1920 | 2240 | 2496 | 3024 | 3840 | 4032 | 4480 | 4960 | 5280 | 6720 | 8640 | 9120 | 11520 | 21760 => {
@@ -322,20 +335,20 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
                         }
 						let msg: String = ratiovec.to_string();
 						//println!("{} line {}", function_name!(), line!());
-						self.outmap.lock().unwrap().get_mut(&ratiovec.ratio).unwrap().push(n);
 						if inumthreads == 1 {
 							println!("{}", msg.clone());
 						}
 						/*
                         if bln_array {
                             if let Some(tx) = &self.tx {
-                                tx.send(Some(Message { threadid: self.ithread + 1, datatype: DataType::ARRAY, calcdensity: seq.calcdensity, n: n, ratio: ratiovec.ratio, msg: msg.clone() }));
+                                tx.send(Some(Message { thread_id: self.thread_id + 1, datatype: DataType::ARRAY, calcdensity: seq.calcdensity, n: n, ratio: ratiovec.ratio, msg: msg.clone() }));
                             }
                         }
 						*/
+						self.outmap.lock().unwrap().get_mut(&ratiovec.ratio).unwrap().push(n);
                         for vt in 0..vec_types.len() {
                             if let Some(tx) = &self.tx {
-                                tx.send(Some(Message { threadid: self.ithread + 1, datatype: vec_types[vt], calcdensity: seq.calcdensity, n: n, ratio: ratiovec.ratio, msg: msg.clone() }));
+                                tx.send(Some(Message { thread_id: self.thread_id + 1, datatype: vec_types[vt], calcdensity: seq.calcdensity, n: n, ratio: ratiovec.ratio, msg: msg.clone() }));
                             }
                         }
 					}
@@ -416,19 +429,22 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 						}
 					}
 				}
+				//println!("n = {}, icombinations = {}", n, icombinations);
 				if icombinations > vecmaxcombinations[vecmaxcombinations.len() - 1] {
 					vecmaxcombinations.push(icombinations);
 				}
-                if (n - nstart - nstepby * self.ithread) % ithousands < inumthreads
+                if (n - nstart - nstepby * self.thread_id) % ithousands < inumthreads
                 {
                     self.print_duration(&seq, n, n - nstart, inumthreads);   
                 }                
             },
         }
     }
+	}
 	
 	//println!("maxcombinations = {:?}", vecmaxcombinations);
 	if self.debug {
+		println!("do_work() n = {}, nfinish = {}, thread_id = {} / {}, elapsed = {:.2}", n, nfinish, self.thread_id, inumthreads, t1.elapsed().as_secs_f64());
 		println!("n = {}", n);
 		println!("afinish = {}", self.afinish.load(Ordering::SeqCst));
         println!("nvec.len() = {}, {} - {} + 1 = {}", nvec.len(), nvec[nvec.len()-1], nvec[0], nvec[nvec.len()-1] - nvec[0] + 1);
@@ -438,7 +454,7 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 		tx.send(None);
 	}
     seq.max_combinations.sort();
-	return (seq.max_stack, seq.max_combinations);
+	return (seq.max_stack, seq.max_combinations, seq.len_frequencies);
 }
 }
 
@@ -462,7 +478,7 @@ fn init(maxprime: u32) -> PrimesType
 
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, after_help = "Example: target\\release\\sequence_rust.exe 1 \"[(1,2)]\" 2 8388608 RATIO tinyvec --file --stacksize 33554432")]
 struct Args {
     #[arg(index = 1)]
     numthreads: u8,
@@ -592,13 +608,13 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust.exe 1 "[(1,2)]" 2 8388608 OR arrayvec
  * 33554432
  * 134217728
- * target\release\sequence_rust.exe 1 "[(1,2)]" 4194304 8388608 --file --array --stacksize 1048576
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 4194304 8388608 RATIO tinyvec --file --stacksize 33554432
  * target\release\sequence_rust.exe 4 "[(1,2), (1,3), (1,4)]" 2 8388608 ratio tinyvec --file
  * target\release\sequence_rust.exe 1 "[(1,2)]" 2 4408322 RATIO tinyvec --file --stacksize 1048576
  * target\release\sequence_rust.exe 1 "[(1,2)]" 2 4440482 RATIO tinyvec --file --stacksize 1048576
  * target\release\sequence_rust.exe 1 "[(1,4)]" 2 25522560 RATIO smallvec --file --stacksize 33554432
  * target\release\sequence_rust.exe 1 "[(1,5)]" 58069444 134217728 RATIO smallvec --file --stacksize 33554432
- * target\release\sequence_rust.exe 1 "[(1,2)]" 61501442 134217728 RATIO tinyvec --file
+ * target\release\sequence_rust.exe 1 "[(1,2)]" 1045524482 1073741824 RATIO tinyvec --file --stacksize 67108864
  * target\release\sequence_rust.exe 1 "[(1,3)]" 59875202 134217728 RATIO tinyvec --file
  * python.exe "E:\Python\Sequence\sequence_th.py" 1 [(1,3)] 15301442 134217728
  * 
@@ -624,6 +640,12 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    2.45 minutes (RATIO tinyvec )
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    0.78 minutes (RATIO tinyvec ) backtrack_stack
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    0.41 minutes (RATIO tinyvec ) backtrack_recurse
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    0.40-0.41 minutes (RATIO tinyvec ) 2,444,199-2,605,797 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 2 threads in    0.22-0.23 minutes (RATIO tinyvec ) 4,571,728-4,810,546 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 4 threads in    0.13-0.13 minutes (RATIO tinyvec ) 7,857,898-8,120,370 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 1 thread  in    2.09-2.21 minutes (RATIO tinyvec ) 1,893,705-2,010,232 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 2 threads in    0.99-1.26 minutes (RATIO tinyvec ) 3,317,387-4,219,439 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 4 threads in    0.77-0.83 minutes (RATIO tinyvec ) 5,038,834-5,451,918 per min
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in   21.39 minutes (   OR tinyvec ) 21.39/2.45 = 8.73
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    2.83 minutes (RATIO array   )
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    3.36 minutes (RATIO vec     )
@@ -649,10 +671,15 @@ fn print_time(f: &str, s: &str)
 fn print_memory(f: &str, pid: &Pid) -> bool {
     let mut system = System::new_all();
     system.refresh_all();
-    if let Some(process) = system.process(*pid) {
+	if let Some(process) = system.process(*pid) {
 		let memory_mb = process.memory() / 1024 / 1024;
 		let virtual_mb = process.virtual_memory() / 1024 / 1024;
-		println!("{}() physical_memory={} MB, virtual_memory={} MB", f, memory_mb.separate_with_commas(), virtual_mb.separate_with_commas());
+		let stack_mb = stack::remaining_stack().unwrap_or(0) / 1024 / 1024;
+		if stack_mb == 0 {
+			println!("{}() physical_memory={} MB, virtual_memory={} MB", f, memory_mb.separate_with_commas(), virtual_mb.separate_with_commas());
+		} else {
+			println!("{}() physical_memory={} MB, virtual_memory={} MB, remaining_stack={} MB", f, memory_mb.separate_with_commas(), virtual_mb.separate_with_commas(), stack_mb.separate_with_commas());
+		}
 		return true;
     }
 	return false;
@@ -706,8 +733,20 @@ fn main()
 	let mut bln_gt_half: bool = false;
 	let mut min_factors_len: usize = 4;
 	
+	if let Some(remaining) = stack::remaining_stack() {
+		if remaining < 64 * 1024 {
+			panic!("Stack near exhaustion: {} KB left", remaining / 1024);
+		}
+	}
+	
     let output = Command::new("rustc").arg("--version").output().unwrap();
     println!("{}() rust_version=\"{}\"", function_name!(), String::from_utf8_lossy(&output.stdout).trim_end());
+	let mut system = System::new_all();
+    system.refresh_all();
+	let os = System::name().unwrap_or_else(|| "Unknown".to_string());
+    let os_version = System::os_version().unwrap_or_else(|| "Unknown".to_string());
+    let kernel = System::kernel_version().unwrap_or_else(|| "Unknown".to_string());
+	println!("{}() system=\"{} {}\"", function_name!(), os, os_version);
     let cpuid = CpuId::new();
     if let Some(brand_string) = cpuid.get_processor_brand_string() && let Some(freq_info) = cpuid.get_processor_frequency_info() {
         let base_ghz = freq_info.processor_base_frequency() as f64 / 1000.0;
@@ -762,7 +801,7 @@ fn main()
 	if line_numbers { println!("{}() line {}", function_name!(), line!()); }
     //let vecratios1: Vec<Ratio<i32>> = (iratio..=iratio).map(|x| Ratio::<i32>::new(1, x as i32)).collect();
     let mut vecratios1: Vec<Ratio<i32>> = Vec::new();
-	let mut outmap1: Arc<Mutex<AHashMap<Ratio<i32>, ArrayVec<[u32; 4096]>>>> = Arc::new(Mutex::new(AHashMap::new()));
+	let mut outmap1: Arc<Mutex<AHashMap<Ratio<i32>, TinyVec<[u32; 8192]>>>> = Arc::new(Mutex::new(AHashMap::new()));
 	let tuples: Vec<&str> = args.ratios.split("),(").collect();
     let half: Ratio<i32> = Ratio::<i32>::new(1, 2);
 	for tuple1 in tuples {
@@ -775,7 +814,7 @@ fn main()
             bln_gt_half = true;
         }
 		vecratios1.push(rat);
-		outmap1.lock().unwrap().insert(rat, ArrayVec::<[u32; 4096]>::new());
+		outmap1.lock().unwrap().insert(rat, TinyVec::<[u32; 8192]>::new());
 		if den > 4 || num > 1 {
 			min_factors_len = 2;
 		}
@@ -803,146 +842,7 @@ fn main()
 	println!("{}() logging={}, debug={}, perf={}, file={}{}", function_name!(), args.logging, args.debug, args.perf, args.file, if args.file && let Some(ref fp) = args.filepath { format!(", file_path=\"{}\"", fp) } else { "".to_string() });
 
 
-    let mut istacksize = args.numthreads as usize * args.stacksize;
-    if args.numthreads == 1 {
-        istacksize += args.finish as usize;
-    }
-	
-	
-    if false {
-		let builder_test = thread::Builder::new().stack_size(istacksize);
-		let handle_test = builder_test.spawn(move || {
-			let bprint: bool = false;
-			/*
-			#   75576
-			primes = list(sympy.primerange(2, 70))
-			len([x for x in list(itertools.combinations(primes, 6)) + list(itertools.combinations(primes, 7)) + list(itertools.combinations(primes, 8)) if math.prod(x) < 2**32])
-			# 8503548 (5 + 6 + 7 + 8)
-			primes = sorted(3 * list(sympy.primerange(2, 30)))
-			len([x for x in list(itertools.combinations(primes, 5)) + list(itertools.combinations(primes, 6)) + list(itertools.combinations(primes, 7)) + list(itertools.combinations(primes, 8)) if math.prod(x) < 2**32])
-			#   66099 (3 + 4 + 5)
-			#  126165 (4 + 5 + 6)
-			primes = [2, 2, 2, 2, 3, 3, 3, 5] + [list(sympy.primerange(128-i, 128)) for i in range(40, 512) if len(list(sympy.primerange(128-i, 128))) == 10][0] + [list(sympy.primerange(1620, 1620+i)) for i in range(40, 512) if len(list(sympy.primerange(1620, 1620+i))) == 10][0]
-			len([x for x in list(itertools.combinations(primes, 3)) + list(itertools.combinations(primes, 4)) + list(itertools.combinations(primes, 5)) if math.prod(x) < 2**32])
-			len([x for x in list(itertools.combinations(primes, 4)) + list(itertools.combinations(primes, 5)) + list(itertools.combinations(primes, 6)) if math.prod(x) < 2**32])
-			*/
-			// bprint = true    75576 ...  6.13- 6.91 (7.45-7.92 previous get_divisors() method)
-			// perf =  true, bprint = false, 8503548 ... 10.65-15.16
-			// perf =  true, bprint = false,  126165 ...  3.60- 4.81
-			// perf = false, bprint = false, 8503548 ...  9.85-13.46 (10.17-13.62 previous get_divisors() method)
-			// perf = false, bprint = false,  126165 ...  3.17- 4.48 ( 5.74- 8.27 previous get_divisors() method)
-			// this get_divisors ran for 155.86-191.34 sec, approximated_sqrt ran for 10.32-11.98 sec
-			// prev get_divisors ran for 157.20-160.15 sec, approximated_sqrt ran for 10.35-12.13 sec
-			const PRIMES1: [u32; 30] = [2, 2, 2, 3, 3, 3, 5, 5, 5, 7, 7, 7, 11, 11, 11, 13, 13, 13, 17, 17, 17, 19, 19, 19, 23, 23, 23, 29, 29, 29];
-			const PRIMES2: [u32; 28] = [2, 2, 2, 2, 3, 3, 3, 5, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 1621, 1627, 1637, 1657, 1663, 1667, 1669, 1693, 1697, 1699];
-			let mut comboa = PRIMES1.iter().combinations(5);
-			let mut combob = PRIMES1.iter().combinations(6);
-			let mut comboc = PRIMES1.iter().combinations(7);
-			let mut combod = PRIMES1.iter().combinations(8);
-			let mut products1: SmallVec<[u32; 131072]> = comboa.chain(combob).chain(comboc).chain(combod).map(|c| c.iter().map(|&&x| x as u64).product::<u64>()).filter(|&x| x <= u32::MAX as u64).map(|x| x as u32).collect();
-			comboa = PRIMES2.iter().combinations(4);
-			combob = PRIMES2.iter().combinations(5);
-			comboc = PRIMES2.iter().combinations(6);
-			let mut products2: SmallVec<[u32; 131072]> = comboa.chain(combob).chain(comboc).map(|c| c.iter().map(|&&x| x as u64).product::<u64>()).filter(|&x| x <= u32::MAX as u64).map(|x| x as u32).collect();
-			let mut elapsed1: SmallVec<[f64; 8]> = SmallVec::new();
-			let mut elapsed2: SmallVec<[f64; 8]> = SmallVec::new();
-			let mut icount = 0;
-			for _ in 0..8 {
-				let mut inst: Instant = Instant::now();
-				for p in &products1 {
-					let vec = divisors::get_divisors(*p);
-					if bprint { println!("get_divisors({}) = {:?}", p, vec); }
-				}
-				elapsed1.push((100.0 * inst.elapsed().as_secs_f64()).round() / 100.0);
-				inst = Instant::now();
-				icount = 0;
-				while icount < products1.len() - products2.len() {
-					icount += products2.len();
-					for p in &products2 {
-						let vec = divisors::get_divisors(*p);
-						if bprint { println!("get_divisors({}) = {:?}", p, vec); }
-					}
-				}
-				elapsed2.push((100.0 * inst.elapsed().as_secs_f64()).round() / 100.0);				
-			}
-			
-			let min1 = elapsed1.clone().into_iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-			let max1 = elapsed1.clone().into_iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-			let mean1 = elapsed1.iter().sum::<f64>() / elapsed1.len() as f64;
-			let var1 = elapsed1.iter().map(|x| (mean1 - x)*(mean1 - x)).sum::<f64>() / (elapsed1.len() as f64 - 1.0);
-			
-			let min2 = elapsed2.clone().into_iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-			let max2 = elapsed2.clone().into_iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-			let mean2 = elapsed2.iter().sum::<f64>() / elapsed2.len() as f64;
-			let var2 = elapsed2.iter().map(|x| (mean2 - x)*(mean2 - x)).sum::<f64>() / (elapsed2.len() as f64 - 1.0);
-			
-			println!("get_divisors() for combination length {}", products1.len());
-			println!("{:.2}-{:.2} +/- {:.2}", min1, max1, (100.0*var1.sqrt()).round()/100.0);
-			println!("get_divisors() for combination length {} (icount = {})", products2.len(), icount);
-			println!("{:.2}-{:.2} +/- {:.2}", min2, max2, (100.0*var2.sqrt()).round()/100.0);
-			let mut test: Vec<(u32, SmallVec<[u32; 512]>)> = Vec::new();
-			// sympy.divisors(2*3*3*3*5*19*23*113*233)[1:-1]
-			test.push((3877083665, smallvec![5, 7, 13, 17, 19, 23, 31, 35, 37, 65, 85, 91, 95, 115, 119, 133, 155, 161, 185, 217, 221, 247, 259, 299, 323, 391, 403, 437, 455, 481, 527, 589, 595, 629, 665, 703, 713, 805, 851, 1085, 1105, 1147, 1235, 1295, 1495, 1547, 1615, 1729, 1955, 2015, 2093, 2185, 2261, 2405, 2635, 2737, 2821, 2945, 3059, 3145, 3367, 3515, 3565, 3689, 4123, 4199, 4255, 4403, 4921, 4991, 5083, 5681, 5735, 5957, 6851, 7429, 7657, 7735, 8029, 8177, 8645, 9139, 9269, 10013, 10465, 11063, 11305, 11951, 12121, 13547, 13685, 14105, 14467, 14911, 15295, 16169, 16835, 18445, 19499, 20615, 20995, 21793, 22015, 24605, 24955, 25415, 26381, 28405, 29393, 29785, 34255, 35581, 37145, 38285, 39767, 40145, 40885, 45695, 46345, 47957, 50065, 52003, 53599, 55315, 57239, 59755, 60605, 63973, 64883, 67735, 70091, 72335, 74555, 77441, 80845, 83657, 84847, 94829, 96577, 97495, 101269, 104377, 108965, 113183, 130169, 131905, 136493, 146965, 152551, 155363, 157573, 176111, 177905, 184667, 188071, 198835, 210197, 230299, 239785, 253487, 260015, 267995, 274873, 283309, 286195, 319865, 324415, 342953, 350455, 370481, 387205, 418285, 424235, 448477, 474145, 482885, 501239, 506345, 521885, 565915, 650845, 676039, 682465, 762755, 776815, 787865, 880555, 911183, 923335, 940355, 1050985, 1087541, 1103011, 1151495, 1232777, 1267435, 1316497, 1374365, 1416545, 1471379, 1612093, 1714765, 1774409, 1852405, 1924111, 1983163, 2242385, 2400671, 2506195, 2593367, 2993887, 3139339, 3380195, 3508673, 3573349, 4555915, 4816253, 5437705, 5515055, 5830201, 6163885, 6516107, 6582485, 7356895, 8060465, 8521063, 8872045, 9620555, 9915815, 12003355, 12966835, 14969435, 15696695, 17543365, 17866745, 20957209, 24081265, 25013443, 29151005, 32580535, 33713771, 40811407, 42605315, 45612749, 59647441, 104786045, 110773819, 125067215, 168568855, 204057035, 228063745, 298237205, 553869095, 775416733]));
-			test.push((2*2*5*19*23*233*1753, smallvec![2, 4, 5, 10, 19, 20, 23, 38, 46, 76, 92, 95, 115, 190, 230, 233, 380, 437, 460, 466, 874, 932, 1165, 1748, 1753, 2185, 2330, 3506, 4370, 4427, 4660, 5359, 7012, 8740, 8765, 8854, 10718, 17530, 17708, 21436, 22135, 26795, 33307, 35060, 40319, 44270, 53590, 66614, 80638, 88540, 101821, 107180, 133228, 161276, 166535, 201595, 203642, 333070, 403190, 407284, 408449, 509105, 666140, 766061, 806380, 816898, 1018210, 1532122, 1633796, 2036420, 2042245, 3064244, 3830305, 4084490, 7660610, 7760531, 8168980, 9394327, 15321220, 15521062, 18788654, 31042124, 37577308, 38802655, 46971635, 77605310, 93943270, 155210620, 178492213, 187886540, 356984426, 713968852, 892461065, 1784922130]));
-			test.push((2*3*5*19*23*91*1753, smallvec![2, 3, 5, 6, 7, 10, 13, 14, 15, 19, 21, 23, 26, 30, 35, 38, 39, 42, 46, 57, 65, 69, 70, 78, 91, 95, 105, 114, 115, 130, 133, 138, 161, 182, 190, 195, 210, 230, 247, 266, 273, 285, 299, 322, 345, 390, 399, 437, 455, 483, 494, 546, 570, 598, 665, 690, 741, 798, 805, 874, 897, 910, 966, 1235, 1311, 1330, 1365, 1482, 1495, 1610, 1729, 1753, 1794, 1995, 2093, 2185, 2415, 2470, 2622, 2730, 2990, 3059, 3458, 3506, 3705, 3990, 4186, 4370, 4485, 4830, 5187, 5259, 5681, 6118, 6279, 6555, 7410, 8645, 8765, 8970, 9177, 10374, 10465, 10518, 11362, 12271, 12558, 13110, 15295, 17043, 17290, 17530, 18354, 20930, 22789, 24542, 25935, 26295, 28405, 30590, 31395, 33307, 34086, 36813, 39767, 40319, 45578, 45885, 51870, 52590, 56810, 61355, 62790, 66614, 68367, 73626, 79534, 80638, 85215, 91770, 99921, 113945, 119301, 120957, 122710, 136734, 159523, 166535, 170430, 184065, 198835, 199842, 201595, 227890, 233149, 238602, 241914, 282233, 319046, 333070, 341835, 368130, 397670, 403190, 432991, 466298, 478569, 499605, 524147, 564466, 596505, 604785, 683670, 699447, 766061, 797615, 846699, 865982, 957138, 999210, 1048294, 1165745, 1193010, 1209570, 1298973, 1398894, 1411165, 1532122, 1572441, 1595230, 1693398, 2164955, 2298183, 2331490, 2392845, 2597946, 2620735, 2822330, 3030937, 3144882, 3497235, 3669029, 3830305, 4233495, 4329910, 4596366, 4785690, 5241470, 5362427, 6061874, 6494865, 6994470, 7338058, 7660610, 7862205, 8466990, 9092811, 9958793, 10724854, 11007087, 11490915, 12989730, 15154685, 15724410, 16087281, 18185622, 18345145, 19917586, 22014174, 22981830, 26812135, 29876379, 30309370, 32174562, 36690290, 45464055, 49793965, 53624270, 55035435, 59752758, 69711551, 80436405, 90928110, 99587930, 110070870, 139423102, 149381895, 160872810, 209134653, 298763790, 348557755, 418269306, 697115510, 1045673265]));
-			test.push((2*3*3*3*5*19*23*113*233, smallvec![2, 3, 5, 6, 9, 10, 15, 18, 19, 23, 27, 30, 38, 45, 46, 54, 57, 69, 90, 95, 113, 114, 115, 135, 138, 171, 190, 207, 226, 230, 233, 270, 285, 339, 342, 345, 414, 437, 466, 513, 565, 570, 621, 678, 690, 699, 855, 874, 1017, 1026, 1035, 1130, 1165, 1242, 1311, 1398, 1695, 1710, 2034, 2070, 2097, 2147, 2185, 2330, 2565, 2599, 2622, 3051, 3105, 3390, 3495, 3933, 4194, 4294, 4370, 4427, 5085, 5130, 5198, 5359, 6102, 6210, 6291, 6441, 6555, 6990, 7797, 7866, 8854, 10170, 10485, 10718, 10735, 11799, 12582, 12882, 12995, 13110, 13281, 15255, 15594, 16077, 19323, 19665, 20970, 21470, 22135, 23391, 23598, 25990, 26329, 26562, 26795, 30510, 31455, 32154, 32205, 38646, 38985, 39330, 39843, 44270, 46782, 48231, 49381, 52658, 53590, 57969, 58995, 62910, 64410, 66405, 70173, 77970, 78987, 79686, 80385, 96462, 96615, 98762, 101821, 115938, 116955, 117990, 119529, 131645, 132810, 140346, 144693, 148143, 157974, 160770, 193230, 199215, 203642, 233910, 236961, 239058, 241155, 246905, 263290, 289386, 289845, 296286, 305463, 350865, 394935, 398430, 444429, 473922, 482310, 493810, 500251, 509105, 579690, 597645, 605567, 610926, 701730, 710883, 723465, 740715, 789870, 888858, 916389, 1000502, 1018210, 1184805, 1195290, 1211134, 1333287, 1421766, 1446930, 1481430, 1500753, 1527315, 1816701, 1832778, 2222145, 2369610, 2501255, 2666574, 2749167, 3001506, 3027835, 3054630, 3554415, 3633402, 4444290, 4502259, 4581945, 5002510, 5450103, 5498334, 6055670, 6666435, 7108830, 7503765, 9004518, 9083505, 9163890, 10900206, 11505773, 13332870, 13506777, 13745835, 15007530, 16350309, 18167010, 22511295, 23011546, 27013554, 27250515, 27491670, 32700618, 34517319, 45022590, 54501030, 57528865, 67533885, 69034638, 81751545, 103551957, 115057730, 135067770, 163503090, 172586595, 207103914, 310655871, 345173190, 517759785, 621311742, 1035519570, 1553279355]));
-			for (n, div) in test {
-				for (i, d) in divisors::get_divisors(n).iter().enumerate() {
-					if div[i] != *d {
-						println!("Failed test for get_divisors({})", n);
-						break;
-					}
-				}
-			}
-		}).unwrap();
-		handle_test.join().unwrap();
-    }
-	
-	if false {
-		if line_numbers { println!("{}() line {}", function_name!(), line!()); }
-		// target\debug\sequence_rust.exe 1 "[(1,2)]" 2 65536 ratio vec --stacksize 2097152
-		// target\release\sequence_rust.exe 1 "[(1,2)]" 2 134217728 ratio smallvec --stacksize 33554432
-		let builder = thread::Builder::new().stack_size(args.stacksize + args.finish as usize);
-		let handle_main = builder.spawn(move || {
-			let mut seq1: Sequence24 = Sequence24::new(args.finish as usize, false, false, args.datatype, args.method);
-			for n in 2..512 {
-				for this_combination in seq1.factor_combinations_vec(n) {
-					//let tvec: TinyVec<[i32; 24]> = this_combination.iter().map(|&x| x as i32).collect();
-					let this_density: Ratio<i32> = seq1.calc_density_xor(n as usize, &this_combination);
-					if *this_density.denom() <= 5 {
-						println!("{}\t{}\t{:?}", this_density, n, this_combination);
-					}
-				}
-			}
-			println!("{}() line {}", function_name!(), line!()); 
-			for n in [108126720, 111767040, 131155200] {
-				for this_combination in seq1.factor_combinations_smallvec(n) {
-					let this_density: Ratio<i32> = seq1.calc_density_or(n as usize, &this_combination);
-					if *this_density.denom() <= 5 {
-						println!("{}\t{}\t{:?}", this_density, n, this_combination);
-					}
-				}
-			}
-		}).unwrap();
-		handle_main.join().unwrap();
-		//return;
-	}
-			
-	/*
-	if false {
-		min_factors_len = 2;
-		for n in [720, 840, 6720] {
-			for this_combination in seq1.factor_combinations_vec(n as u32) {
-				let this_density: Ratio<i32> = seq1.calc_density(&array_vec);                    
-				//if let Some(this_ratio) = vecratios1.iter().find(|&x| *x == this_density) {
-				if *this_density.denom() <= 3 {
-					println!("{} {} {:?}", this_density, n, this_combination);
-				}
-			}
-		}
-		min_factors_len = 4;
-	}
-	*/	
+    let mut istacksize = args.stacksize + args.finish as usize;
 	
     let mut vec_types: TinyVec<[DataType; 4]> = TinyVec::new();
     //for dt in [DataType::ARRAY, DataType::VEC, DataType::TINYVEC, DataType::ARRAYVEC] {
@@ -962,17 +862,20 @@ fn main()
             outmap2.lock().unwrap().get_mut(&ratio).unwrap().push(n as u32);
             println!("{}", msg);
             for vt in 0..vec_types.len() {
-                tx1.send(Some(Message { threadid: 1, datatype: vec_types[vt], calcdensity: args.method, n: n as u32, ratio: *ratio, msg: msg.clone() }));
+                tx1.send(Some(Message { thread_id: 1, datatype: vec_types[vt], calcdensity: args.method, n: n as u32, ratio: *ratio, msg: msg.clone() }));
             }
         }
-    }
+    }	
 	
-	
-	let builder_main = thread::Builder::new().stack_size(istacksize);
-    
 	if args.numthreads == 1 {
         
+		let builder_main = thread::Builder::new().stack_size(istacksize);
+		
 		let handle_main = builder_main.spawn(move || {
+			let (txtasks1, rxtasks1) = crossbeam::channel::bounded::<Option<(u32, u32)>>(2);
+			txtasks1.send(Some((args.start, args.finish))).unwrap();
+			txtasks1.send(None);
+			
 			let mut seq1: Sequence24 = Sequence24::new(std::cmp::max(args.finish as usize, 8192), false, false, args.datatype, args.method);
             let seq1_bln_debug = false;
             seq1.bln_debug = seq1_bln_debug;
@@ -988,7 +891,7 @@ fn main()
 			let mut m = Main { 
 				debug: args.debug,
                 logging: args.logging,
-				ithread: 0,
+				thread_id: 0,
 				t1: t1, 
 				anumthreads: AtomicU32::new(args.numthreads as u32), 
 				astart: AtomicU32::new(args.start), 
@@ -999,9 +902,15 @@ fn main()
 				predefined: predefined1,
 				outmap: outmap2,
 				tx: if args.file { Some(tx1) } else { None },
+				rx: rxtasks1,
 			};
 			_ = print_memory(function_name!(), &pid);
-			let (mut max_stack, mut max_combinations): (Vec<usize>, Vec<usize>) = m.do_work(args.start, args.finish, 1, seq1);
+			let (mut max_stack, mut max_combinations, len_frequencies): (Vec<usize>, Vec<usize>, [usize; 24]) = m.do_work(args.start, args.finish, 1, seq1);
+			for i in 2..len_frequencies.len() {
+				if len_frequencies[i] > 0 {
+					println!("frequency_count[{}] = {}", i, len_frequencies[i]);
+				}
+			}
 			if args.logging {
 				println!("max_stack = {:?}", max_stack);
 				println!("max_combinations = {:?}", max_combinations);
@@ -1069,51 +978,73 @@ fn main()
 				
 		
 	} else {
-	
+		
+		istacksize += (args.numthreads as u32 * args.finish) as usize;
+		//println!("{}() line {}", function_name!(), line!());
+		let builder_main = thread::Builder::new().stack_size(istacksize);
 		let handle_main = builder_main.spawn(move || {
+			let mut i: u32 = args.start;
+			let inc: u32 = 16384;
+			let (txtasks1, rxtasks1) = crossbeam::channel::bounded::<Option<(u32, u32)>>(((args.finish - args.start)/inc + args.numthreads as u32 + 2) as usize);
+			while i + inc <= args.finish {
+				txtasks1.send(Some((i, i + inc))).unwrap();
+				i += inc;
+			}
+			for i in 0..args.numthreads {
+				txtasks1.send(None);
+			}
 			let mut seq1: Sequence24 = Sequence24::new(std::cmp::max(args.finish as usize, 8192), false, false, args.datatype, args.method);
-            seq1.bln_debug = false;
-            seq1.bln_perf = args.perf;
-            seq1.bln_divisor_gen = false;
-            seq1.bln_exhaustive_search = false;
+			seq1.bln_debug = false;
+			seq1.bln_perf = args.perf;
+			seq1.bln_divisor_gen = false;
+			seq1.bln_exhaustive_search = false;
 			seq1.bln_factors = true;
 			seq1.bln_divisors = false;
 			seq1.bln_gt_half = bln_gt_half;
 			seq1.min_factors_len = min_factors_len;
 			seq1.set_primes(&vecprimes1);
 			
-			//let mut mem1 = Arc::new(LockedBool::new(false));
 			let mut mem1 = LockedBool::new(false);
 			let (tx1, rx1) = mpsc::channel::<Option<Message>>();
+			//println!("{}() line {}", function_name!(), line!());
+			//let handle_main = builder_main.spawn(|| {
 			thread::scope(|scp| 
 			{
 				let mut threads = vec![];
 				for ith in 0..(args.numthreads as usize)
-				{					
+				{
+					//println!("{}() line {}, thread_id {}", function_name!(), line!(), ith);
 					let mut seq2: Sequence24 = Sequence24::new(seq1.capacity, seq1.global, seq1.resize, seq1.datatype, seq1.calcdensity);
-                    let seq2_bln_debug = seq1.bln_debug;
-                    seq2.bln_debug = seq2_bln_debug;
-                    seq2.bln_perf = seq1.bln_perf;
-                    seq2.bln_divisor_gen = seq1.bln_divisor_gen;
-                    seq2.bln_exhaustive_search = seq1.bln_exhaustive_search;
+					let seq2_bln_debug = seq1.bln_debug;
+					seq2.bln_debug = seq2_bln_debug;
+					seq2.bln_perf = seq1.bln_perf;
+					seq2.bln_divisor_gen = seq1.bln_divisor_gen;
+					seq2.bln_exhaustive_search = seq1.bln_exhaustive_search;
 					seq2.min_factors_len = min_factors_len;
 					seq2.bln_factors = seq1.bln_factors;
 					seq2.bln_divisors = seq1.bln_divisors;
 					seq2.bitprimes = seq1.bitprimes.clone();
-					seq2.factors = Arc::clone(&seq1.factors);
-					seq2.factor_slices = Arc::clone(&seq1.factor_slices);
-					seq2.divisors = Arc::clone(&seq1.divisors);
+					//seq2.factors = Arc::clone(&seq1.factors);
+					//seq2.factor_slices = Arc::clone(&seq1.factor_slices);
+					//seq2.divisors = Arc::clone(&seq1.divisors);
 					//let vecprimes2: Arc<Vec<u32>> = Arc::clone(&vecprimes1);
 					let vecratios2: Vec<Ratio<i32>> = vecratios1.clone();
 					let predefined2: HashMap<u32, Vec<RatioVec>, RandomState> = predefined1.clone();
 					let outmap3 = Arc::clone(&outmap2);
 					let tx2 = tx1.clone();
-					//println!("{}() line {}", function_name!(), line!());
-					threads.push(scp.spawn(move || {
+					let rxtasks2 = rxtasks1.clone();
+					//println!("{}() line {}, thread_id {}", function_name!(), line!(), ith);
+					
+					let builder_thread = thread::Builder::new().stack_size(istacksize);
+					//println!("{}() line {}, thread_id {}", function_name!(), line!(), ith);
+					
+					//threads.push(scp.spawn(move || {
+					threads.push(builder_thread.spawn_scoped(scp, move || {
+						//println!("{}() line {}, thread_id {}", function_name!(), line!(), ith);
 						let mut m = Main { 
 							debug: args.debug,
-                            logging: args.logging,
-							ithread: ith as u32,
+							logging: args.logging,
+							thread_id: ith as u32,
 							t1: t1, 
 							anumthreads: AtomicU32::new(args.numthreads as u32), 
 							astart: AtomicU32::new(args.start), 
@@ -1124,65 +1055,65 @@ fn main()
 							predefined: predefined2,
 							outmap: outmap3,
 							tx: Some(tx2),
+							rx: rxtasks2,
 						};
-						let (mut max_stack, mut max_combinations): (Vec<usize>, Vec<usize>) = m.do_work(args.start, args.finish, args.numthreads as u32, seq2);
-						println!("maxstack = {:?}", max_stack);
+						let (mut max_stack, mut max_combinations, len_frequencies): (Vec<usize>, Vec<usize>, [usize; 24]) = m.do_work(args.start, args.finish, args.numthreads as u32, seq2);
+						//println!("{}() line {}, thread_id {}", function_name!(), line!(), ith);
 						if args.logging {
+							println!("maxstack = {:?}", max_stack);
 							println!("maxcombinations = {:?}", max_combinations);
 							//println!("{}() line {} thread {}", function_name!(), line!(), ith);
 						}
-                        if seq2_bln_debug {
-                            let len = max_combinations.len();
-                            let avg = max_combinations.iter().map(|&x| x as f64).sum::<f64>() / len as f64;
-                            let mdn90 = max_combinations[90 * len / 100];
-                            let mdn95 = max_combinations[95 * len / 100];
-                            let mdn98 = max_combinations[98 * len / 100];
-                            let mdn99 = max_combinations[99 * len / 100];
-                            println!("max_combinations, {}, len = {}, avg = {:.2}, mdn90 = {}, mdn95 = {}, mdn98 = {}, mdn99 = {}", args.finish, len, avg, mdn90, mdn95, mdn98, mdn99);
-                        }
-					}));
+						if seq2_bln_debug {
+							let len = max_combinations.len();
+							let avg = max_combinations.iter().map(|&x| x as f64).sum::<f64>() / len as f64;
+							let mdn90 = max_combinations[90 * len / 100];
+							let mdn95 = max_combinations[95 * len / 100];
+							let mdn98 = max_combinations[98 * len / 100];
+							let mdn99 = max_combinations[99 * len / 100];
+							println!("max_combinations, {}, len = {}, avg = {:.2}, mdn90 = {}, mdn95 = {}, mdn98 = {}, mdn99 = {}", args.finish, len, avg, mdn90, mdn95, mdn98, mdn99);
+						}
+					}).unwrap());
 				}
 				
 				if !mem1.lock_and_load() {
 					mem1.store(print_memory(function_name!(), &pid));
 				}
 				mem1.unlock();
-
-				//let rx2 = rx1.clone();
-				//let rx2 = Arc::new(Mutex::new(rx1));
+				
 				threads.push(scp.spawn(move || {
 					let mut messages: Vec<Message> = Vec::new();
 					let mut file: Option<std::fs::File> = if args.file { Some(OpenOptions::new().create(true).append(true).open(args.filepath.clone().unwrap()).unwrap()) } else { None };
-					let mut ithread = 0;
-                    let mut vecmax: Vec<u32> = Vec::new();
-                    for _ in 0..args.numthreads {
-                        vecmax.push(0);
-                    }
+					let mut thread_id = 0;
+					let mut vecmax: Vec<u32> = Vec::new();
+					for _ in 0..args.numthreads {
+						vecmax.push(0);
+					}
 					//println!("{}() line {}", function_name!(), line!());
 					for msg in rx1.iter() {
 						//println!("{}() line {}", function_name!(), line!());
 						if msg.is_none() {
-							ithread += 1;
-							if ithread >= args.numthreads {
-								println!("ithread = {}, inumthreads = {}", ithread, args.numthreads);
+							thread_id += 1;
+							if thread_id >= args.numthreads {
+								println!("thread_id = {}, inumthreads = {}", thread_id, args.numthreads);
 								break;
 							}
 						} else {
 							messages.push(msg.unwrap());
-                            let n = messages[messages.len() - 1].n;
-                            let idx = (messages[messages.len() - 1].threadid - 1) as usize;
-                            if n > vecmax[idx] { vecmax[idx] = n; }
-                            let minmax = vecmax.iter().min().unwrap();
-                            
-                            let mut messages_extract: Vec<Message> = messages.extract_if(.., |msg| msg.n <= *minmax).collect();                            
+							let n = messages[messages.len() - 1].n;
+							let idx = (messages[messages.len() - 1].thread_id - 1) as usize;
+							if n > vecmax[idx] { vecmax[idx] = n; }
+							let minmax = vecmax.iter().min().unwrap();
+							
+							let mut messages_extract: Vec<Message> = messages.extract_if(.., |msg| msg.n <= *minmax).collect();                            
 							//println!("{}() messages.len() = {}", function_name!(), messages.len());
-                            //println!("{}() messages_extract.len() = {}", function_name!(), messages_extract.len());
+							//println!("{}() messages_extract.len() = {}", function_name!(), messages_extract.len());
 							if messages_extract.len() > 0 {
 								messages_extract.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
 								for msg in messages_extract {
-                                    if !msg.msg.starts_with("thread") || args.logging {
-                                        println!("{}", msg.msg);
-                                    }
+									if !msg.msg.starts_with("thread") || args.logging {
+										println!("{}", msg.msg);
+									}
 									if args.file && !msg.msg.starts_with("thread") && let Some(ref mut f1) = file {
 										if let Err(e) = writeln!(f1, "{}", msg.msg) {
 											println!("Failed to write to file: {}", e);
@@ -1199,9 +1130,9 @@ fn main()
 					if messages.len() > 0 {
 						messages.sort_by_key(|msg| (msg.n, *msg.ratio.denom()));
 						for msg in messages {
-                            if !msg.msg.starts_with("thread") || args.logging {
-                                println!("{}", msg.msg);
-                            }
+							if !msg.msg.starts_with("thread") || args.logging {
+								println!("{}", msg.msg);
+							}
 							if args.file && !msg.msg.starts_with("thread") && let Some(ref mut f) = file {
 								writeln!(f, "{}", msg.msg);
 							}

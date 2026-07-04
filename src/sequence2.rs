@@ -287,7 +287,7 @@ fn insert2(setvec: &mut HashSet<Vec<u32>, RandomState>, singles: &[u32], multipl
     }
 }
 
-
+/*
 pub fn factor_combinations2(&mut self, i: u32) -> HashSet<Vec<u32>, RandomState>
 {
     let mut setvec2: HashSet<Vec<u32>, RandomState> = HashSet::with_hasher(RandomState::new());
@@ -3967,7 +3967,7 @@ pub fn factor_combinations2(&mut self, i: u32) -> HashSet<Vec<u32>, RandomState>
     }
     return setvec2;
 }
-            
+*/
 
 
 }

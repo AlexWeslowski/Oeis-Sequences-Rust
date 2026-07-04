@@ -10,15 +10,22 @@ pub struct CalcDensityType(u8);
 
 impl CalcDensityType {
     pub const NONE: CalcDensityType = CalcDensityType(0);
-    pub const RATIO: CalcDensityType = CalcDensityType(1 << 0);
+    
+	pub const RATIO: CalcDensityType = CalcDensityType(1 << 0);
     pub const FRAC: CalcDensityType = CalcDensityType(1 << 0);
     pub const FRACTION: CalcDensityType = CalcDensityType(1 << 0);
-    pub const OR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const BITOR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 1);
-    pub const XOR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 2);
-    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 2);
+	
+	pub const RATIOBITMASK: CalcDensityType = CalcDensityType(1 << 1);
+	pub const RATIO_BITMASK: CalcDensityType = CalcDensityType(1 << 1);
+	pub const RATIO_BIT_MASK: CalcDensityType = CalcDensityType(1 << 1);
+	
+    pub const OR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BITOR: CalcDensityType = CalcDensityType(1 << 2);
+    pub const BIT_OR: CalcDensityType = CalcDensityType(1 << 2);
+	
+    pub const XOR: CalcDensityType = CalcDensityType(1 << 3);
+    pub const BITXOR: CalcDensityType = CalcDensityType(1 << 3);
+    pub const BIT_XOR: CalcDensityType = CalcDensityType(1 << 3);
 	
 	#[function_name::named]
 	pub fn to_string(self) -> String {
@@ -27,6 +34,10 @@ impl CalcDensityType {
 		if debug { println!("{} line {}", function_name!(), line!()); }
 		if self.is_set(Self::RATIO) {
 			s1.push_str("RATIO|");
+		}
+		if debug { println!("{} line {}", function_name!(), line!()); }
+		if self.is_set(Self::RATIOBITMASK) {
+			s1.push_str("RATIOBITMASK|");
 		}
 		if debug { println!("{} line {}", function_name!(), line!()); }
 		if self.is_set(Self::OR) {
@@ -48,15 +59,23 @@ impl CalcDensityType {
         match name.to_uppercase().trim() {
             "0" => Some(Self::NONE),
             "NONE" => Some(Self::NONE),
-            "1" => Some(Self::RATIO),
+            
+			"1" => Some(Self::RATIO),
             "RATIO" => Some(Self::RATIO),
             "FRAC" => Some(Self::FRAC),
             "FRACTION" => Some(Self::FRACTION),
-            "2" => Some(Self::OR),
+            
+			"2" => Some(Self::RATIOBITMASK),
+            "RATIOBITMASK" => Some(Self::RATIOBITMASK),
+            "RATIO_BITMASK" => Some(Self::RATIO_BITMASK),
+            "RATIO_BIT_MASK" => Some(Self::RATIO_BIT_MASK),
+			
+			"4" => Some(Self::OR),
             "OR" => Some(Self::OR),
             "BITOR" => Some(Self::BITOR),
             "BIT_OR" => Some(Self::BIT_OR),
-            "4" => Some(Self::XOR),
+            
+			"8" => Some(Self::XOR),
             "XOR" => Some(Self::XOR),
             "BITXOR" => Some(Self::BITXOR),
             "BIT_XOR" => Some(Self::BIT_XOR),
@@ -77,9 +96,12 @@ impl From<u8> for CalcDensityType {
 			cdt |= CalcDensityType::RATIO;
 		}
 		if (u | 2) != 0 {
-			cdt |= CalcDensityType::OR;
+			cdt |= CalcDensityType::RATIOBITMASK;
 		}
 		if (u | 4) != 0 {
+			cdt |= CalcDensityType::OR;
+		}
+		if (u | 8) != 0 {
 			cdt |= CalcDensityType::XOR;
 		}
 		cdt
