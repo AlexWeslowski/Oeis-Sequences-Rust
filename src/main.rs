@@ -311,6 +311,9 @@ pub fn do_work(&mut self, mut nstart: u32, nfinish: u32, inumthreads: u32, mut s
 		break;
 	}
 	let (mut n, nfinish) = opt.unwrap();
+	if n <= nstart + 2 {
+		n -= nstepby;
+	}
 	//println!("do_work() n = {}, nfinish = {}, thread_id = {} / {}", n, nfinish, self.thread_id, inumthreads);
 	while n < nfinish
     {
@@ -625,10 +628,11 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * target\release\sequence_rust.exe 1 "[(1,2)]" 2 1048576 ratio tinyvec --stacksize 33554432
  * 
  * 
- * C:\Python\Python314\python.exe "E:\Python\Sequence\sequence_th.py" 1 [(1,2)] 2 1048576
+ * C:\Python\Python314\python3.14t.exe "E:\Python\Sequence\sequence_th.py" 1 [(1,2)] 2 1048576
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    6.62 minutes
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 1 thread  in   34.17 minutes
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 1 thread  in    2.06 minutes (2,035,417 per min)
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 4 threads in    9.33 minutes (  416,330 per min)
  * 503.22 MB physical memory
  * 706.79 MB virtual memory
  * 
@@ -645,7 +649,7 @@ const PREDEFINED: &str = include_str!("predefined.txt");
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 4 threads in    0.13-0.13 minutes (RATIO tinyvec ) 7,857,898-8,120,370 per min
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 1 thread  in    2.09-2.21 minutes (RATIO tinyvec ) 1,893,705-2,010,232 per min
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 2 threads in    0.99-1.26 minutes (RATIO tinyvec ) 3,317,387-4,219,439 per min
- * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 4 threads in    0.77-0.83 minutes (RATIO tinyvec ) 5,038,834-5,451,918 per min
+ * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 4194304 with 4 threads in    0.56-0.83 minutes (RATIO tinyvec ) 5,038,834-7,524,324 per min
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in   21.39 minutes (   OR tinyvec ) 21.39/2.45 = 8.73
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    2.83 minutes (RATIO array   )
  * i7-1165G7 @ 2.80GHz [(1,2)] from 2 to 1048576 with 1 thread  in    3.36 minutes (RATIO vec     )
@@ -986,8 +990,8 @@ fn main()
 			let mut i: u32 = args.start;
 			let inc: u32 = 16384;
 			let (txtasks1, rxtasks1) = crossbeam::channel::bounded::<Option<(u32, u32)>>(((args.finish - args.start)/inc + args.numthreads as u32 + 2) as usize);
-			while i + inc <= args.finish {
-				txtasks1.send(Some((i, i + inc))).unwrap();
+			while i < args.finish {
+				txtasks1.send(Some((i, std::cmp::min(args.finish, i + inc)))).unwrap();
 				i += inc;
 			}
 			for i in 0..args.numthreads {
@@ -1155,10 +1159,15 @@ fn main()
 		handle_main.join().unwrap();
 	}
 	
-	for (key, val) in outmap1.lock().unwrap().iter_mut() {
+	
+	let mut locked_map = outmap1.lock().unwrap();
+	let mut kvp: Vec<(&Ratio<i32>, &mut TinyVec<[u32; 8192]>)> = locked_map.iter_mut().collect();
+	kvp.sort_by_key(|&(key, _)| (key.denom(), key.numer()));
+	for (key, val) in kvp {
 		val.sort();
 		println!("{}/{}\t{:?}", key.numer(), key.denom(), val);
 	}
+	
     // 1 thread ... 0.70 minutes ... 10.05 minutes
     // 2 threads .. 0.41 minutes .... 6.77 minutes
     // 4 threads .. 0.38 minutes
