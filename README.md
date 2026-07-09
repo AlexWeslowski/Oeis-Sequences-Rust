@@ -1,5 +1,5 @@
 
-## January 1, 2026
+## July 4, 2026
 
 
 ### Sequence for 1/2:
